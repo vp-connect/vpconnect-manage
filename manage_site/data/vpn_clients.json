@@ -1,0 +1,11 @@
+{
+  "clients": [
+    {
+      "id": "8f7a93dd-56fe-4dc7-a598-ba2da37e9109",
+      "name": "ыыы",
+      "tunnel_ip": "10.0.0.185",
+      "private_key_rel": "8f7a93dd-56fe-4dc7-a598-ba2da37e9109_yyy.key",
+      "enabled": true
+    }
+  ]
+}

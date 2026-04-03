@@ -1,0 +1,547 @@
+.page-dashboard {
+  margin: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: #ececec;
+  color: #1a1a1a;
+}
+
+/* Пока открыт модальный диалог — без прокрутки страницы под ним */
+.page-dashboard:has(.dash-dialog[open]) {
+  overflow: hidden;
+}
+
+.dash-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1.5rem;
+  background: #f5f5f5;
+  border-bottom: 1px solid #ddd;
+}
+
+.dash-header-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.dash-header-brand .brand-icon-wrap {
+  width: 2.5rem;
+  height: 2.5rem;
+  flex-shrink: 0;
+}
+
+.dash-header-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.dash-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+
+.dash-header-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  color: #666;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.dash-header-icon-btn:hover {
+  color: #333;
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.dash-header-icon-svg {
+  width: 1.35rem;
+  height: 1.35rem;
+  display: block;
+}
+
+.dash-logout-form {
+  margin: 0;
+}
+
+.dash-logout-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.9rem;
+  color: #666;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.dash-logout-btn:hover {
+  color: #333;
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.dash-icon-svg {
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
+.dash-main {
+  max-width: 57.2rem; /* было 52rem, +10% */
+  margin: 0 auto;
+  padding: 1.5rem 1rem 2rem;
+}
+
+.dash-flash-list {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+}
+
+.dash-flash {
+  padding: 0.55rem 0.85rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.dash-flash + .dash-flash {
+  margin-top: 0.35rem;
+}
+
+.dash-flash--message {
+  color: #1b5e20;
+  background: #e8f5e9;
+}
+
+.dash-flash--error {
+  color: #b71c1c;
+  background: #ffebee;
+}
+
+.dash-card {
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.06);
+  padding: 1.25rem 1.5rem 1.5rem;
+}
+
+.dash-card-proxy {
+  margin-bottom: 1rem;
+}
+
+.dash-proxy-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.dash-proxy-link {
+  flex: 1;
+  min-width: 12rem;
+  word-break: break-all;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: #1565c0;
+  text-decoration: none;
+}
+
+.dash-proxy-link:hover {
+  text-decoration: underline;
+}
+
+.dash-proxy-actions {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.dash-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.dash-card-title {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
+.dash-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+  border-radius: 8px;
+  cursor: pointer;
+  border: none;
+  font-family: inherit;
+}
+
+.dash-btn-outline {
+  background: #fff;
+  border: 1px solid #ccc;
+  color: #333;
+}
+
+.dash-btn-outline:hover {
+  background: #f9f9f9;
+}
+
+.dash-btn-primary {
+  background: #7b1f24;
+  color: #fff;
+  border: 1px solid #7b1f24;
+}
+
+.dash-btn-primary:hover {
+  background: #681a1e;
+}
+
+.dash-empty {
+  text-align: center;
+  padding: 2.5rem 1rem 2rem;
+}
+
+.dash-empty-text {
+  margin: 0 0 1.25rem;
+  color: #888;
+  font-size: 0.95rem;
+}
+
+.dash-client-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.dash-client-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 0;
+  border-bottom: 1px solid #eee;
+}
+
+.dash-client-row:last-child {
+  border-bottom: none;
+}
+
+.dash-client-info {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  min-width: 0;
+}
+
+.dash-client-avatar {
+  width: 2.75rem;
+  height: 2.75rem;
+  flex-shrink: 0;
+  border-radius: 50%;
+  overflow: hidden;
+}
+
+.dash-client-avatar svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.dash-client-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.dash-client-name {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.dash-client-ip {
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.dash-client-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.dash-toggle-form {
+  margin: 0;
+}
+
+.dash-switch {
+  position: relative;
+  display: inline-block;
+  width: 2.75rem;
+  height: 1.5rem;
+  cursor: pointer;
+}
+
+.dash-switch-input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.dash-switch-slider {
+  position: absolute;
+  inset: 0;
+  background: #ccc;
+  border-radius: 999px;
+  transition: background 0.2s;
+}
+
+.dash-switch-slider::before {
+  content: "";
+  position: absolute;
+  height: 1.15rem;
+  width: 1.15rem;
+  left: 0.2rem;
+  bottom: 0.175rem;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.dash-switch-input:checked + .dash-switch-slider {
+  background: #c62828;
+}
+
+.dash-switch-input:checked + .dash-switch-slider::before {
+  transform: translateX(1.2rem);
+}
+
+.dash-switch-input:focus-visible + .dash-switch-slider {
+  outline: 2px solid #7b1f24;
+  outline-offset: 2px;
+}
+
+.dash-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: #fff;
+  color: #555;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.dash-icon-btn:hover {
+  background: #f5f5f5;
+  color: #333;
+}
+
+.dash-icon-btn svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+.dash-icon-btn-danger:hover {
+  color: #b71c1c;
+  border-color: #e0a0a0;
+}
+
+.dash-inline-form {
+  display: inline;
+  margin: 0;
+}
+
+/* Диалоги: не шире экрана, поля по краям + safe-area. display:flex только при [open], иначе ломается display:none у <dialog>. */
+.dash-dialog {
+  --dash-dialog-gutter: 0.625rem;
+  --dash-dialog-max-w: min(
+    22rem,
+    calc(
+      100vw - 2 * var(--dash-dialog-gutter) - env(safe-area-inset-left, 0px) -
+        env(safe-area-inset-right, 0px)
+    )
+  );
+  border: none;
+  border-radius: 12px;
+  padding: 0;
+  box-sizing: border-box;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+}
+
+.dash-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  width: var(--dash-dialog-max-w);
+  max-width: var(--dash-dialog-max-w);
+  max-height: calc(100vh - 1rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  max-height: calc(100dvh - 1rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  margin: auto;
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+
+.dash-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.dash-dialog-form,
+.dash-dialog-password-inner {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: clamp(1rem, 4vw, 1.5rem);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.dash-dialog-qr-wrap {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: clamp(1rem, 4vw, 1.5rem);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.dash-dialog-title {
+  margin: 0 0 1rem;
+  font-size: 1.1rem;
+}
+
+.dash-dialog-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  color: #444;
+}
+
+.dash-dialog-input {
+  padding: 0.55rem 0.65rem;
+  font-size: 1rem;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+}
+
+.dash-form-password .dash-dialog-label + .dash-dialog-label {
+  margin-top: 0.85rem;
+}
+
+.dash-pw-field-wrap {
+  position: relative;
+  display: block;
+  margin-top: 0.35rem;
+}
+
+.dash-pw-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding-right: 2.75rem;
+}
+
+.dash-pw-toggle {
+  position: absolute;
+  right: 0.35rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  border: none;
+  background: transparent;
+  color: #666;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.dash-pw-toggle:hover {
+  color: #333;
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.dash-pw-eye {
+  width: 1.35rem;
+  height: 1.35rem;
+  display: block;
+}
+
+.dash-pw-toggle[aria-pressed="false"] .dash-pw-eye-off,
+.dash-pw-toggle[aria-pressed="true"] .dash-pw-eye-open {
+  display: none;
+}
+
+.dash-pw-toggle[aria-pressed="true"] .dash-pw-eye-off,
+.dash-pw-toggle[aria-pressed="false"] .dash-pw-eye-open {
+  display: block;
+}
+
+.dash-dialog-actions-split {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1.25rem;
+  padding-top: 0.25rem;
+}
+
+.dash-btn-primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.dash-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+}
+
+.dash-qr-img {
+  display: block;
+  flex-shrink: 1;
+  margin: 0 auto 1rem;
+  max-width: 100%;
+  width: min(280px, 100%, calc(100vh - 10.5rem));
+  width: min(280px, 100%, calc(100dvh - 10.5rem));
+  height: auto;
+  max-height: min(280px, calc(100vh - 10.5rem));
+  max-height: min(280px, calc(100dvh - 10.5rem));
+  aspect-ratio: 1;
+  object-fit: contain;
+}

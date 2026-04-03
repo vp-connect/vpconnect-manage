@@ -1,0 +1,151 @@
+/* Страница входа */
+.auth-body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: #e8e8e8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  box-sizing: border-box;
+}
+
+.auth-layout {
+  width: 100%;
+  max-width: 22rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.auth-tool-desc {
+  margin: 0;
+  text-align: center;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: #444;
+  max-width: 26rem;
+}
+
+.auth-card {
+  width: 100%;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+  padding: 2rem 1.75rem 1.75rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-sizing: border-box;
+}
+
+.auth-avatar {
+  width: 5rem;
+  height: 5rem;
+  margin-bottom: 1.25rem;
+}
+
+.auth-avatar-svg,
+.auth-avatar .brand-icon-wrap,
+.auth-avatar .brand-icon-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.auth-avatar .brand-icon-wrap {
+  line-height: 0;
+}
+
+.auth-form {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.auth-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.65rem 0.85rem;
+  font-size: 1rem;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.auth-input:focus {
+  outline: none;
+  border-color: #999;
+}
+
+.auth-input--error {
+  border-color: #c62828;
+  box-shadow: 0 0 0 1px #c62828;
+}
+
+.auth-input:disabled {
+  background: #f0f0f0;
+  color: #888;
+}
+
+.auth-field-error {
+  margin: -0.25rem 0 0;
+  font-size: 0.85rem;
+  color: #c62828;
+}
+
+.auth-message {
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.auth-message--config {
+  color: #b71c1c;
+}
+
+.auth-message--lockout {
+  color: #555;
+}
+
+.auth-submit {
+  width: 100%;
+  padding: 0.7rem 1rem;
+  font-size: 1rem;
+  color: #fff;
+  background: #bdbdbd;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.auth-submit:hover:not(:disabled) {
+  background: #9e9e9e;
+}
+
+.auth-submit:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+/* Главная */
+.page-home {
+  margin: 0;
+  min-height: 100vh;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: #f5f5f5;
+}
+
+.home-main {
+  padding: 2rem;
+}
+
+.home-title {
+  margin: 0;
+  font-size: 1.25rem;
+  color: #333;
+}

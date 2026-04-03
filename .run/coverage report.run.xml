@@ -1,0 +1,13 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="coverage report" type="BatchConfigurationType" factoryName="Batch">
+    <module name="http_load_testing" />
+    <option name="INTERPRETER_OPTIONS" value="" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <option name="PARENT_ENVS" value="true" />
+    <option name="SCRIPT_NAME" value="start ./htmlcov/index.html" />
+    <option name="PARAMETERS" value="" />
+    <method v="2">
+      <option name="RunConfigurationTask" enabled="true" run_configuration_name="pytest with coverage" run_configuration_type="tests" />
+    </method>
+  </configuration>
+</component>

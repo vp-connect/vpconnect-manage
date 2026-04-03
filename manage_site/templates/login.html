@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Вход — SelfVPN</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}">
+</head>
+<body class="auth-body">
+  <div class="auth-layout">
+    <p class="auth-tool-desc">
+      SelfVPN — веб-панель для управления VPN: настройка доступа, пользователей и сервисов из браузера.
+    </p>
+    <div class="auth-card">
+      <div class="auth-avatar" aria-hidden="true">
+        {% include '_brand_icon.html' %}
+      </div>
+
+      {% if config_error %}
+        <p class="auth-message auth-message--config">Ошибка конфигурации: не найден или повреждён файл данных администратора.</p>
+      {% elif locked %}
+        <p class="auth-message auth-message--lockout">
+          Слишком много неверных попыток. Повторите ввод пароля позже
+          {% if locked_until %} (до {{ locked_until | fmt_lockout_utc }}){% endif %}.
+        </p>
+        <form class="auth-form" method="post" action="{{ url_for('login') }}">
+          <input
+            class="auth-input"
+            type="password"
+            name="password"
+            autocomplete="current-password"
+            placeholder="Пароль"
+            disabled
+            aria-disabled="true"
+          >
+          <button class="auth-submit" type="submit" disabled>Войти</button>
+        </form>
+      {% else %}
+        <form class="auth-form" method="post" action="{{ url_for('login') }}">
+          <input
+            class="auth-input{% if wrong_password %} auth-input--error{% endif %}"
+            type="password"
+            name="password"
+            autocomplete="current-password"
+            placeholder="Пароль"
+            required
+            autofocus
+          >
+          {% if wrong_password %}
+            <p class="auth-field-error">Неверный пароль</p>
+          {% endif %}
+          <button class="auth-submit" type="submit">Войти</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+</body>
+</html>
