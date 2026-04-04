@@ -11,7 +11,8 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _resolved_path() -> Path:
-    p = Path(settings.MTPROXY_LINK_FILE)
+    raw = (settings.MTPROXY_LINK_FILE or '').strip()
+    p = Path(raw).expanduser()
     if p.is_absolute():
         return p.resolve()
     # пути вида manage_site/data/... в .env считаются от корня репозитория, не от cwd
@@ -19,7 +20,9 @@ def _resolved_path() -> Path:
 
 
 def read_mtproxy_link() -> str | None:
-    """Первая непустая строка из файла или None, если файла нет / пусто."""
+    """Первая непустая строка из файла или None, если параметр не задан / файла нет / пусто."""
+    if not (settings.MTPROXY_LINK_FILE or '').strip():
+        return None
     path = _resolved_path()
     if not path.is_file():
         return None

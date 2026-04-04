@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 from pathlib import Path
@@ -10,6 +11,22 @@ from typing import Any
 from . import settings
 
 _lock = threading.Lock()
+
+
+def ensure_admin_user_from_default_password() -> bool:
+    """При отсутствии ``admin_user.json`` и заданном ``ADMIN_DEFAULT_PASSWORD`` создать файл с MD5.
+
+    Возвращает True, если файл был создан.
+    """
+    path: Path = settings.ADMIN_USER_JSON_PATH
+    if path.is_file():
+        return False
+    default = (settings.ADMIN_DEFAULT_PASSWORD or '').strip()
+    if not default:
+        return False
+    digest = hashlib.md5(default.encode('utf-8')).hexdigest()
+    save_password_md5_hex(digest)
+    return True
 
 
 def _is_hex_md5(s: str) -> bool:

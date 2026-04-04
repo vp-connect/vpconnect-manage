@@ -40,12 +40,13 @@
         </ul>
       {% endif %}
     {% endwith %}
-    {% if telegram_proxy_url %}
+    {% if mtproxy_enabled %}
     <section class="dash-card dash-card-proxy" aria-labelledby="tg-proxy-title">
       <div class="dash-card-head">
         <h2 class="dash-card-title" id="tg-proxy-title">Telegram proxy</h2>
       </div>
       <div class="dash-proxy-body">
+        {% if telegram_proxy_url %}
         <a class="dash-proxy-link" href="{{ telegram_proxy_url }}" target="_blank" rel="noopener noreferrer">{{ telegram_proxy_url }}</a>
         <div class="dash-proxy-actions">
           <button type="button" class="dash-icon-btn" id="open-tg-proxy-qr" title="QR-код со ссылкой" aria-label="Показать QR-код">
@@ -55,9 +56,13 @@
             <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
           </button>
         </div>
+        {% else %}
+        <p class="dash-empty-text">Файл ссылки MTProxy задан, но пуст или недоступен. Проверьте MTPROXY_LINK_FILE.</p>
+        {% endif %}
       </div>
     </section>
     {% endif %}
+    {% if wireguard_enabled %}
     <section class="dash-card">
       <div class="dash-card-head">
         <h1 class="dash-card-title">Клиенты</h1>
@@ -109,8 +114,10 @@
         </ul>
       {% endif %}
     </section>
+    {% endif %}
   </main>
 
+  {% if wireguard_enabled %}
   <dialog class="dash-dialog" id="dialog-create">
     <form method="post" action="{{ url_for('clients_create') }}" class="dash-dialog-form">
       <h2 class="dash-dialog-title">Новый клиент</h2>
@@ -123,7 +130,9 @@
       </div>
     </form>
   </dialog>
+  {% endif %}
 
+  {% if wireguard_enabled %}
   <dialog class="dash-dialog" id="dialog-qr">
     <div class="dash-dialog-qr-wrap">
       <h2 class="dash-dialog-title">QR-код</h2>
@@ -131,8 +140,9 @@
       <button type="button" class="dash-btn dash-btn-outline" id="qr-close">Закрыть</button>
     </div>
   </dialog>
+  {% endif %}
 
-  {% if telegram_proxy_url %}
+  {% if mtproxy_enabled and telegram_proxy_url %}
   <dialog class="dash-dialog" id="dialog-tg-proxy-qr">
     <div class="dash-dialog-qr-wrap">
       <h2 class="dash-dialog-title">Telegram proxy</h2>
@@ -178,6 +188,7 @@
 
   <script>
     (function () {
+      {% if wireguard_enabled %}
       var dCreate = document.getElementById('dialog-create');
       var dQr = document.getElementById('dialog-qr');
       var qrImg = document.getElementById('qr-image');
@@ -200,20 +211,21 @@
           dQr.showModal();
         });
       });
-      document.getElementById('qr-close').addEventListener('click', function () { dQr.close(); });
+      var qrClose = document.getElementById('qr-close');
+      if (qrClose && dQr) qrClose.addEventListener('click', function () { dQr.close(); });
+      {% endif %}
 
       var openTgQr = document.getElementById('open-tg-proxy-qr');
       var dTgQr = document.getElementById('dialog-tg-proxy-qr');
       var tgQrImg = document.getElementById('tg-proxy-qr-image');
       var tgQrSrc = {{ url_for('telegram_proxy_qr_png')|tojson }};
+      var tgQrClose = document.getElementById('tg-proxy-qr-close');
       if (openTgQr && dTgQr && tgQrImg) {
         openTgQr.addEventListener('click', function () {
           tgQrImg.src = tgQrSrc + (tgQrSrc.indexOf('?') >= 0 ? '&' : '?') + 't=' + Date.now();
           dTgQr.showModal();
         });
-        document.getElementById('tg-proxy-qr-close').addEventListener('click', function () {
-          dTgQr.close();
-        });
+        if (tgQrClose) tgQrClose.addEventListener('click', function () { dTgQr.close(); });
       }
 
       var copyTgBtn = document.getElementById('copy-tg-proxy-link');

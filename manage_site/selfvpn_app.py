@@ -3,6 +3,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
+import threading
+import time
 import uuid as uuid_mod
 from datetime import timezone
 
@@ -17,6 +20,7 @@ from . import vpn_clients_service
 
 selfvpn_app = Flask(__name__)
 selfvpn_app.secret_key = settings.FLASK_SECRET_KEY
+_app_log = logging.getLogger(__name__)
 
 # Сброс просроченных блокировок при импорте приложения (файл мог остаться от прошлых запусков).
 login_attempts_store.purge_expired(settings.LOGIN_ATTEMPTS_JSON_PATH)
@@ -37,6 +41,7 @@ def _load_admin_password_md5() -> str | None:
     return raw.strip().lower()
 
 
+admin_user_store.ensure_admin_user_from_default_password()
 _ADMIN_PASSWORD_MD5 = _load_admin_password_md5()
 
 
@@ -75,12 +80,25 @@ def _require_client_uuid(client_id: str) -> str:
     return client_id
 
 
+def _require_wireguard() -> None:
+    if not settings.wireguard_enabled():
+        abort(404)
+
+
 @selfvpn_app.route('/')
 def home():
-    clients = vpn_clients_service.sync_clients_json_with_runtime_state()
-    telegram_proxy_url = mtproxy_link.read_mtproxy_link()
+    wireguard_enabled = settings.wireguard_enabled()
+    mtproxy_enabled = settings.mtproxy_enabled()
+    clients = (
+        vpn_clients_service.sync_clients_json_with_runtime_state()
+        if wireguard_enabled
+        else []
+    )
+    telegram_proxy_url = mtproxy_link.read_mtproxy_link() if mtproxy_enabled else None
     return render_template(
         'clients.html',
+        wireguard_enabled=wireguard_enabled,
+        mtproxy_enabled=mtproxy_enabled,
         clients=clients,
         telegram_proxy_url=telegram_proxy_url,
     )
@@ -88,6 +106,8 @@ def home():
 
 @selfvpn_app.get('/telegram-proxy/qr.png')
 def telegram_proxy_qr_png():
+    if not settings.mtproxy_enabled():
+        abort(404)
     url = mtproxy_link.read_mtproxy_link()
     if not url:
         abort(404)
@@ -148,17 +168,21 @@ def admin_password():
 
 @selfvpn_app.post('/clients')
 def clients_create():
+    _require_wireguard()
     name = (request.form.get('name') or '').strip()
     if name:
         try:
             vpn_clients_service.create_client(name)
         except ValueError:
             pass
+        except RuntimeError as e:
+            flash(str(e), 'error')
     return redirect(url_for('home'))
 
 
 @selfvpn_app.post('/clients/<client_id>/toggle')
 def clients_toggle(client_id):
+    _require_wireguard()
     client_id = _require_client_uuid(client_id)
     enabled = request.form.get('enabled') == '1'
     try:
@@ -170,6 +194,7 @@ def clients_toggle(client_id):
 
 @selfvpn_app.get('/clients/<client_id>/qr.png')
 def clients_qr_png(client_id):
+    _require_wireguard()
     client_id = _require_client_uuid(client_id)
     try:
         data = vpn_clients_service.qr_png_bytes(client_id)
@@ -180,6 +205,7 @@ def clients_qr_png(client_id):
 
 @selfvpn_app.get('/clients/<client_id>/config.conf')
 def clients_config_download(client_id):
+    _require_wireguard()
     client_id = _require_client_uuid(client_id)
     try:
         body = vpn_clients_service.client_config_bytes(client_id)
@@ -195,6 +221,7 @@ def clients_config_download(client_id):
 
 @selfvpn_app.post('/clients/<client_id>/delete')
 def clients_delete(client_id):
+    _require_wireguard()
     client_id = _require_client_uuid(client_id)
     try:
         vpn_clients_service.delete_client(client_id)
@@ -284,6 +311,29 @@ def fmt_lockout_utc(dt):
     else:
         dt = dt.astimezone(timezone.utc)
     return dt.strftime('%d.%m.%Y %H:%M UTC')
+
+
+def _wireguard_background_sync_loop() -> None:
+    while True:
+        interval = max(0, settings.WIREGUARD_SYNC_INTERVAL_MINUTES)
+        if interval <= 0:
+            return
+        time.sleep(interval * 60)
+        try:
+            with selfvpn_app.app_context():
+                vpn_clients_service.sync_clients_json_with_runtime_state()
+        except Exception:
+            _app_log.exception('WireGuard: фоновая синхронизация')
+
+
+if settings.wireguard_enabled():
+    try:
+        with selfvpn_app.app_context():
+            vpn_clients_service.sync_clients_json_with_runtime_state()
+    except Exception:
+        _app_log.exception('WireGuard: синхронизация при старте')
+    if settings.WIREGUARD_SYNC_INTERVAL_MINUTES > 0:
+        threading.Thread(target=_wireguard_background_sync_loop, daemon=True).start()
 
 
 if __name__ == '__main__':
