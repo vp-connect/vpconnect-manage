@@ -1,4 +1,10 @@
-"""Парсинг и правка wg0.conf по логике vpconnect-configure/wg/*.sh (list_users, create, delete, toggle)."""
+"""
+Разбор и безопасная запись серверного конфига WireGuard (wg0.conf).
+
+Формат блоков клиентов совместим со скриптами vpconnect-configure/wg:
+маркер «# Client: <имя>», затем секция [Peer]; вкл/выкл — комментирование строк
+(list_users.sh, create_client.sh, delete_client.sh, toggle_client.sh).
+"""
 
 from __future__ import annotations
 
@@ -9,10 +15,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterator
 
-CLIENT_MARKER_RE = re.compile(r'^#\s*Client:\s*(.+?)\s*$')
-PUBLIC_KEY_RE = re.compile(r'^\s*PublicKey\s*=\s*(\S+)\s*$')
+CLIENT_MARKER_RE = re.compile(r"^#\s*Client:\s*(.+?)\s*$")
+PUBLIC_KEY_RE = re.compile(r"^\s*PublicKey\s*=\s*(\S+)\s*$")
 ALLOWED_IPS_RE = re.compile(
-    r'^\s*AllowedIPs\s*=\s*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/(\d+)\s*$',
+    r"^\s*AllowedIPs\s*=\s*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/(\d+)\s*$",
 )
 
 
@@ -28,8 +34,9 @@ class WgPeerBlock:
 
 
 def _line_is_active(line: str) -> bool:
+    """Не пустая строка и не закомментированная (для определения enabled у пира)."""
     s = line.strip()
-    return bool(s) and not s.startswith('#')
+    return bool(s) and not s.startswith("#")
 
 
 def peer_enabled(body_lines: list[str]) -> bool:
@@ -37,24 +44,27 @@ def peer_enabled(body_lines: list[str]) -> bool:
     return any(_line_is_active(line) for line in body_lines)
 
 
-def _logical_line(line: str) -> str:
+def logical_config_line(line: str) -> str:
+    """Убрать ведущие пробелы и один уровень префиксных «#» для разбора полей конфига."""
     s = line.lstrip()
-    while s.startswith('#'):
+    while s.startswith("#"):
         s = s[1:].lstrip()
     return s.strip()
 
 
 def parse_peer_public_key(body_lines: list[str]) -> str | None:
+    """Извлечь ``PublicKey`` из тела блока [Peer] (с учётом закомментированных строк)."""
     for line in body_lines:
-        m = PUBLIC_KEY_RE.match(_logical_line(line))
+        m = PUBLIC_KEY_RE.match(logical_config_line(line))
         if m:
             return m.group(1).strip()
     return None
 
 
 def parse_peer_tunnel_ip(body_lines: list[str]) -> str | None:
+    """Извлечь IPv4 из ``AllowedIPs`` (первое совпадение)."""
     for line in body_lines:
-        logical = _logical_line(line)
+        logical = logical_config_line(line)
         m = ALLOWED_IPS_RE.match(logical)
         if m:
             return m.group(1)
@@ -62,7 +72,8 @@ def parse_peer_tunnel_ip(body_lines: list[str]) -> str | None:
 
 
 def iter_conf_lines(path: Path) -> Iterator[str]:
-    text = path.read_text(encoding='utf-8')
+    """Построчное чтение текстового конфига UTF-8."""
+    text = path.read_text(encoding="utf-8")
     for line in text.splitlines():
         yield line
 
@@ -95,28 +106,29 @@ def parse_wg_conf(path: Path) -> tuple[list[str], list[WgPeerBlock]]:
         idx += 1
         while idx < len(lines):
             line = lines[idx]
-            if line.strip() == '' or CLIENT_MARKER_RE.match(line):
+            if line.strip() == "" or CLIENT_MARKER_RE.match(line):
                 break
             body.append(line)
             idx += 1
         peers.append(WgPeerBlock(name=name, body_lines=body))
-        if idx < len(lines) and lines[idx].strip() == '':
+        if idx < len(lines) and lines[idx].strip() == "":
             idx += 1
     return (preamble, peers)
 
 
 def format_wg_conf(preamble: list[str], peers: list[WgPeerBlock]) -> str:
+    """Собрать текст wg0.conf из преамбулы и списка блоков клиентов."""
     parts: list[str] = []
     if preamble:
-        parts.append('\n'.join(preamble).rstrip('\n'))
-    for i, p in enumerate(peers):
-        if parts and not parts[-1].endswith('\n'):
-            parts.append('')
-        block = [f'# Client: {p.name}'] + p.body_lines
-        parts.append('\n'.join(block).rstrip('\n'))
-    out = '\n\n'.join(parts)
-    if out and not out.endswith('\n'):
-        out += '\n'
+        parts.append("\n".join(preamble).rstrip("\n"))
+    for p in peers:
+        if parts and not parts[-1].endswith("\n"):
+            parts.append("")
+        block = [f"# Client: {p.name}"] + p.body_lines
+        parts.append("\n".join(block).rstrip("\n"))
+    out = "\n\n".join(parts)
+    if out and not out.endswith("\n"):
+        out += "\n"
     return out
 
 
@@ -127,22 +139,24 @@ def _normalize_blank_lines(text: str) -> str:
     pending_blank = False
     first = True
     for line in raw_lines:
-        if line.strip() == '':
+        if line.strip() == "":
             pending_blank = True
             continue
         if not first and pending_blank:
-            out_lines.append('')
+            out_lines.append("")
         out_lines.append(line)
         pending_blank = False
         first = False
-    return '\n'.join(out_lines) + ('\n' if out_lines else '')
+    return "\n".join(out_lines) + ("\n" if out_lines else "")
 
 
 def set_peer_enabled(body_lines: list[str], enabled: bool) -> list[str]:
-    """Комментирование/раскомментирование строк блока (как toggle_client.sh: sed s/^/#/ и s/^#//)."""
+    """
+    Комментировать или раскомментировать строки блока (как toggle_client.sh).
+    """
     if enabled:
-        return [line[1:] if line.startswith('#') else line for line in body_lines]
-    return ['#' + line for line in body_lines]
+        return [line[1:] if line.startswith("#") else line for line in body_lines]
+    return ["#" + line for line in body_lines]
 
 
 def append_peer(
@@ -154,9 +168,9 @@ def append_peer(
     """Добавить блок [Peer] в конец (после преамбулы и существующих пиров)."""
     preamble, peers = parse_wg_conf(conf_path)
     body = [
-        '[Peer]',
-        f'PublicKey = {public_key_b64}',
-        f'AllowedIPs = {tunnel_ip}/32',
+        "[Peer]",
+        f"PublicKey = {public_key_b64}",
+        f"AllowedIPs = {tunnel_ip}/32",
     ]
     peers.append(WgPeerBlock(name=wg_name, body_lines=body))
     text = _normalize_blank_lines(format_wg_conf(preamble, peers))
@@ -195,9 +209,10 @@ def set_peer_block_enabled(conf_path: Path, wg_name: str, enabled: bool) -> bool
 
 
 def _atomic_write(path: Path, text: str) -> None:
+    """Записать файл через временный и ``replace``."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + '.tmp')
-    tmp.write_text(text, encoding='utf-8')
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
 
 
@@ -207,6 +222,7 @@ def list_peers_from_conf(conf_path: Path) -> list[WgPeerBlock]:
 
 
 def collect_used_tunnel_ips(peers: list[WgPeerBlock]) -> set[str]:
+    """Множество IPv4 из ``AllowedIPs`` всех переданных пиров."""
     used: set[str] = set()
     for p in peers:
         ip = parse_peer_tunnel_ip(p.body_lines)
@@ -215,13 +231,17 @@ def collect_used_tunnel_ips(peers: list[WgPeerBlock]) -> set[str]:
     return used
 
 
-def pick_free_tunnel_ip(peers: list[WgPeerBlock], subnet_prefix: str = '10.0.0.') -> str:
+def pick_free_tunnel_ip(
+    peers: list[WgPeerBlock],
+    subnet_prefix: str = "10.0.0.",
+) -> str:
+    """Свободный адрес ``10.0.0.2``–``10.0.0.254`` не занятый в ``AllowedIPs`` пиров."""
     used = collect_used_tunnel_ips(peers)
     for n in range(2, 255):
-        candidate = f'{subnet_prefix}{n}'
+        candidate = f"{subnet_prefix}{n}"
         if candidate not in used:
             return candidate
-    raise RuntimeError('Не осталось свободных адресов 10.0.0.2–10.0.0.254')
+    raise RuntimeError("Не осталось свободных адресов 10.0.0.2–10.0.0.254")
 
 
 def try_run_wg_syncconf(
@@ -229,19 +249,23 @@ def try_run_wg_syncconf(
     conf_path: Path,
     log_warning: Callable[[str], None] | None = None,
 ) -> None:
-    """wg syncconf через bash, как в скриптах; только если conf совпадает с /etc/wireguard/<iface>.conf."""
+    """
+    Вызвать ``wg syncconf`` через bash (как в скриптах установки).
+
+    Срабатывает только если ``conf_path`` совпадает с ``/etc/wireguard/<iface>.conf``.
+    """
     try:
-        expected = (Path('/etc/wireguard') / f'{interface}.conf').resolve()
+        expected = (Path("/etc/wireguard") / f"{interface}.conf").resolve()
         if conf_path.resolve() != expected:
             if log_warning:
                 log_warning(
-                    f'WIREGUARD_CONF_PATH не совпадает с {expected}; wg syncconf пропущен '
-                    '(ожидается стандартный путь для wg-quick strip).'
+                    f"WIREGUARD_CONF_PATH не совпадает с {expected}; wg syncconf пропущен "
+                    "(ожидается стандартный путь для wg-quick strip)."
                 )
             return
-        cmd = f'wg syncconf {shlex.quote(interface)} <(wg-quick strip {shlex.quote(interface)})'
+        cmd = f"wg syncconf {shlex.quote(interface)} <(wg-quick strip {shlex.quote(interface)})"
         subprocess.run(
-            ['bash', '-lc', cmd],
+            ["bash", "-lc", cmd],
             check=True,
             capture_output=True,
             text=True,
@@ -249,10 +273,10 @@ def try_run_wg_syncconf(
         )
     except FileNotFoundError:
         if log_warning:
-            log_warning('bash/wg не найдены; wg syncconf пропущен.')
+            log_warning("bash/wg не найдены; wg syncconf пропущен.")
     except subprocess.CalledProcessError as e:
         if log_warning:
-            log_warning(f'wg syncconf завершился с ошибкой: {e.stderr or e.stdout or e}')
+            log_warning(f"wg syncconf завершился с ошибкой: {e.stderr or e.stdout or e}")
     except OSError as e:
         if log_warning:
-            log_warning(f'wg syncconf: {e}')
+            log_warning(f"wg syncconf: {e}")

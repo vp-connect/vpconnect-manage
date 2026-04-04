@@ -1,34 +1,47 @@
 # vpconnect-manage
 
-Веб-панель администратора для **SelfVPN / vpconnect**: вход одного администратора, при необходимости — управление клиентами **WireGuard** (синхронизация с `wg0.conf`), блок **Telegram MTProxy** (ссылка и QR). Конфигурация читается из **`settings.env`** в корне репозитория.
+Веб-панель администратора для **SelfVPN / vpconnect**: один администратор, опционально **WireGuard** (синхронизация с `wg0.conf`), опционально **Telegram MTProxy** (ссылка и QR). Конфигурация — **`settings.env`** в корне репозитория.
+
+Лицензия: [MIT](LICENSE).
 
 ## Возможности
 
-- **Авторизация** — пароль сверяется с MD5 в `manage_site/data/admin_user.json`; лимит попыток и блокировка по IP настраиваются в `settings.env`.
-- **Первый запуск** — если задан `ADMIN_DEFAULT_PASSWORD` и нет `admin_user.json`, приложение создаст файл с хэшем этого пароля.
-- **WireGuard** — включается только при **непустом** `WIREGUARD_CONF_PATH`: дашборд клиентов, создание/вкл/выкл/удаление с правкой `wg0.conf`, фоновая или запросная синхронизация с JSON, выдача `.conf` и QR.
-- **MTProxy** — секция в UI только если **задан** путь `MTPROXY_LINK_FILE` (пустое значение = функция отключена).
+- **Авторизация** — MD5 пароля в `manage_site/data/admin_user.json`, лимит попыток и блокировка по IP (`settings.env`).
+- **Первый запуск** — при заданном `ADMIN_DEFAULT_PASSWORD` и отсутствии `admin_user.json` создаётся файл с хэшем.
+- **WireGuard** — при непустом `WIREGUARD_CONF_PATH`: дашборд, CRUD с правкой `wg0.conf`, синхронизация JSON, выдача `.conf` и QR.
+- **MTProxy** — при непустом `MTPROXY_LINK_FILE`: блок в UI и QR.
 
-## Зачем отдельные поля для Endpoint WireGuard
+## Почему отдельно Endpoint и публичный хост
 
-В **серверном** `wg0.conf` обычно нет строки, которую можно однозначно взять как «куда с телефона стучаться из интернета»: там адреса туннеля и ключи, а **`Endpoint` в клиентском конфиге** — это публичный **хост:порт**, видимый клиенту снаружи. Поэтому панель должна получить эту информацию из настроек:
+Серверный `wg0.conf` не содержит «внешний» адрес для клиентов из интернета. Строка **`Endpoint`** в клиентском конфиге — это **публичный host:port**. Задаётся либо **`WIREGUARD_ENDPOINT`**, либо **`WIREGUARD_PUBLIC_HOST`** плюс порт из **`WIREGUARD_LISTEN_PORT`**, из **`ListenPort`** в конфиге или **51820**.
 
-- либо целиком **`WIREGUARD_ENDPOINT`** (например `vpn.example.com:51820`);
-- либо **`WIREGUARD_PUBLIC_HOST`** + порт: сначала **`WIREGUARD_LISTEN_PORT`**, если задан ненулевой; иначе **`ListenPort`** из секции `[Interface]` в `wg0.conf`; если и его нет — **51820**.
+## Структура проекта
 
-Так **`WIREGUARD_ENDPOINT` не обязателен**, если задан публичный хост и порт можно вывести из конфига.
+| Путь | Назначение |
+|------|------------|
+| `manage_site/selfvpn_app.py` | Экземпляр Flask `selfvpn_app`, маршруты |
+| `manage_site/settings.py` | Загрузка env и константы |
+| `manage_site/vpn_clients_service.py` | JSON клиентов и операции с WG |
+| `manage_site/wireguard_conf.py` | Парсинг и запись `wg0.conf` |
+| `manage_site/wg_local_runtime.py` | Ключи, Endpoint, `wg syncconf` |
+| `manage_site/wg_background_sync.py` | Фоновая синхронизация JSON |
+| `manage_site/templates/`, `manage_site/static/` | UI |
+| `manage_site/data/` | JSON и примеры данных (не статика) |
+| `settings.env` | Значения переменных окружения |
+| `pyproject.toml` | Настройки **Black** (длина строки 100) |
+| `.flake8` | Правила **Flake8** |
 
 ## Требования
 
-- **Python** 3.10+
-- Зависимости из `requirements.txt` (`flask`, `env-settings`, `qrcode[pil]`).
-- На сервере с WireGuard: утилиты **`wg`**, при автоприменении конфига — **`bash`** и совпадение пути к конфигу с ожиданиями `wg-quick` (см. комментарии в коде `wireguard_conf.try_run_wg_syncconf`).
+- Python **3.10+**
+- Зависимости: `requirements.txt`
+- На сервере с WG: **`wg`**; для авто-применения конфига — **`bash`** и путь к `wg0.conf`, совместимый с `wg-quick` (см. `wireguard_conf.try_run_wg_syncconf`)
 
 ## Установка
 
-1. Клонируйте репозиторий, перейдите в корень проекта.
+1. Клонировать репозиторий, перейти в корень.
 
-2. Создайте виртуальное окружение и установите зависимости:
+2. Виртуальное окружение и зависимости:
 
    **Windows**
 
@@ -46,91 +59,82 @@
    venv/bin/python -m pip install -r requirements.txt
    ```
 
-3. Создайте или скопируйте **`settings.env`** в корне и заполните переменные (см. следующий раздел и комментарии в самом файле).
+3. Настроить **`settings.env`** (шаблон и комментарии в файле).
 
-4. Имя файла с переменными можно переопределить через **`ENV_FILENAME`** в окружении процесса (по умолчанию в проекте ожидается `settings.env`).
+4. При необходимости задать **`ENV_FILENAME`** в окружении процесса (иначе используется `settings.env`).
 
-5. Файл **`manage_site/data/admin_user.json`** с полем `password_md5` (32 hex) нужен для входа, если не сработало автосоздание из `ADMIN_DEFAULT_PASSWORD`.
+5. Для входа нужен **`manage_site/data/admin_user.json`** с `password_md5`, если не сработало автосоздание из `ADMIN_DEFAULT_PASSWORD`.
 
 ## Переменные `settings.env`
 
-Имена и типы объявлены в **`manage_site/settings.py`**. Смысл:
+Объявления и типы — в **`manage_site/settings.py`**.
 
 | Переменная | Смысл |
 |------------|--------|
-| `ENV_FILENAME` | Имя файла с переменными (часто задаётся в окружении ОС, не в `settings.env`). По умолчанию используется `settings.env`. |
-| `FLASK_SECRET_KEY` | Секрет подписи сессий Flask; в продакшене — длинная случайная строка. |
-| `ADMIN_DEFAULT_PASSWORD` | Пароль для автосоздания `admin_user.json` при первом запуске и для сброса пароля из UI; пусто — автосоздание и сброс по умолчанию недоступны. |
-| `LOGIN_MAX_FAILED_ATTEMPTS` | Число неверных попыток входа с одного IP до блокировки (по умолчанию 5). |
-| `LOGIN_LOCKOUT_MINUTES` | Длительность блокировки IP в минутах (по умолчанию 60). |
-| `WIREGUARD_CONF_PATH` | Путь к `wg0.conf`. **Пусто** — интеграция WireGuard выключена: секция клиентов скрыта, маршруты `/clients/*` не обрабатываются. |
-| `WIREGUARD_SYNC_INTERVAL_MINUTES` | Период фоновой синхронизации JSON с `wg0.conf` в минутах. **0** — только при старте приложения и при открытии главной страницы. |
-| `WIREGUARD_INTERFACE_NAME` | Имя интерфейса для `wg-quick strip` / `wg syncconf` (по умолчанию `wg0`). |
-| `WIREGUARD_ENDPOINT` | Полный `Endpoint` для клиентских конфигов: `хост:порт`. Достаточно **либо** его, **либо** связки ниже. |
-| `WIREGUARD_PUBLIC_HOST` | Публичный FQDN или IP для клиентского `Endpoint`, если `WIREGUARD_ENDPOINT` пуст. |
-| `WIREGUARD_LISTEN_PORT` | Порт UDP в `Endpoint`, когда не задан полный `WIREGUARD_ENDPOINT`: **0** — взять `ListenPort` из `wg0.conf`, иначе при отсутствии в файле используется **51820**. Ненулевое значение переопределяет порт явно. |
-| `WIREGUARD_DNS` | DNS в клиентском `[Interface]` (по умолчанию `8.8.8.8`). |
-| `WIREGUARD_CLIENT_CONFIG_DIR` | Каталог для клиентских `.conf`. **Пусто** — `<родитель WIREGUARD_CLIENT_KEYS_DIR>/client_config`. |
-| `WIREGUARD_CLIENT_KEYS_DIR` | Каталог файлов ключей клиентов WireGuard. **Пусто** — путь по умолчанию под `manage_site/data/vpn_client_keys`. Относительные пути считаются от **текущей рабочей директории** процесса. |
-| `MTPROXY_LINK_FILE` | Путь к текстовому файлу со ссылкой MTProxy (первая непустая строка). **Пусто** — секция MTProxy в UI скрыта, маршрут QR не используется. |
+| `ENV_FILENAME` | Имя файла с переменными (часто из окружения ОС). |
+| `FLASK_SECRET_KEY` | Секрет сессий Flask (**обязательно** менять в продакшене). |
+| `ADMIN_DEFAULT_PASSWORD` | Автосоздание `admin_user.json` и сброс пароля из UI. |
+| `LOGIN_MAX_FAILED_ATTEMPTS` | Порог неудачных попыток входа с IP. |
+| `LOGIN_LOCKOUT_MINUTES` | Длительность блокировки IP (минуты). |
+| `WIREGUARD_CONF_PATH` | Путь к `wg0.conf`; **пусто** — WG в UI отключён. |
+| `WIREGUARD_SYNC_INTERVAL_MINUTES` | Интервал фоновой синхронизации JSON; **0** — только старт и открытие дашборда. |
+| `WIREGUARD_INTERFACE_NAME` | Имя интерфейса для `wg-quick` / `wg syncconf`. |
+| `WIREGUARD_ENDPOINT` | Полный `host:port` для клиентских конфигов. |
+| `WIREGUARD_PUBLIC_HOST` | FQDN/IP, если `WIREGUARD_ENDPOINT` пуст. |
+| `WIREGUARD_LISTEN_PORT` | Порт для Endpoint; **0** — из `ListenPort` в конфиге или 51820. |
+| `WIREGUARD_DNS` | DNS в клиентском `[Interface]`. |
+| `WIREGUARD_CLIENT_CONFIG_DIR` | Каталог клиентских `.conf`; пусто — рядом с ключами. |
+| `WIREGUARD_CLIENT_KEYS_DIR` | Каталог ключей клиентов; пусто — `manage_site/data/vpn_client_keys` (относительно **cwd**). |
+| `MTPROXY_LINK_FILE` | Файл со ссылкой MTProxy; **пусто** — блок MTProxy скрыт. |
 
-\*Для **создания новых клиентов** WireGuard нужны `WIREGUARD_CONF_PATH` и способ задать Endpoint: **`WIREGUARD_ENDPOINT`** или **`WIREGUARD_PUBLIC_HOST`** (с портом по правилам выше).
+Для **создания** клиентов WG нужны `WIREGUARD_CONF_PATH` и задание Endpoint (`WIREGUARD_ENDPOINT` или `WIREGUARD_PUBLIC_HOST` + порт по правилам выше).
 
-Дублирование с переменными **`VPCONFIGURE_*`** на установленном сервере: часто `WIREGUARD_PUBLIC_HOST` совпадает с `VPCONFIGURE_DOMAIN`, путь к `mtproxy.link` — с `VPCONFIGURE_MTPROXY_LINK_PATH`; в `settings.env` панели нужно указать те же пути/смыслы явно (или через симлинк).
-
-## Документирование `settings.env`
-
-- В репозитории лежит образец **`settings.env`** с **пошаговыми комментариями** к каждой группе переменных.
-- Не коммитьте в открытый репозиторий продакшен-значения секретов и внутренних путей; для команды достаточно шаблона и описания в README.
+На серверах с **VPCONFIGURE_*** часто совмещают: `WIREGUARD_PUBLIC_HOST` ≈ `VPCONFIGURE_DOMAIN`, `MTPROXY_LINK_FILE` ≈ путь из `VPCONFIGURE_MTPROXY_LINK_PATH`.
 
 ## Запуск
 
-Запускайте из **корня репозитория**, чтобы находились `settings.env` и относительные пути.
-
-**Встроенный сервер разработки**
-
-Windows:
-
-```shell
-venv\Scripts\python -m flask --app manage_site.selfvpn_app:selfvpn_app run --debug
-```
-
-Linux / macOS:
+Из **корня** репозитория.
 
 ```shell
 venv/bin/python -m flask --app manage_site.selfvpn_app:selfvpn_app run --debug
 ```
 
-По умолчанию: `http://127.0.0.1:5000/`. Для доступа из сети: `--host=0.0.0.0`.
-
-**Запуск модуля**
+Сеть: добавьте `--host=0.0.0.0`.
 
 ```shell
 venv/bin/python -m manage_site.selfvpn_app
 ```
 
-**Продакшен** — WSGI-сервер (gunicorn, uwsgi и т.д.) с целевым объектом **`manage_site.selfvpn_app:selfvpn_app`**.
+**Продакшен:** WSGI (gunicorn и т.д.) → **`manage_site.selfvpn_app:selfvpn_app`**.
 
 ## Данные на диске
 
 | Путь | Назначение |
 |------|------------|
-| `manage_site/data/admin_user.json` | MD5 пароля администратора. |
-| `manage_site/data/vpn_clients.json` | Список клиентов (поле `wg_name` и др. при включённом WireGuard). |
-| `manage_site/data/login_attempts.json` | Попытки входа и блокировки по IP. |
-| Каталог ключей (`WIREGUARD_CLIENT_KEYS_DIR`) | Приватные/публичные ключи клиентов. |
-| `WIREGUARD_CLIENT_CONFIG_DIR` | Клиентские `.conf` (и при необходимости `qr/`). |
-| Файл по `MTPROXY_LINK_FILE` | Текст ссылки MTProxy. |
+| `manage_site/data/admin_user.json` | Пароль администратора (MD5). |
+| `manage_site/data/vpn_clients.json` | Клиенты (`wg_name`, …). |
+| `manage_site/data/login_attempts.json` | Блокировки входа (часто в `.gitignore`). |
+| `WIREGUARD_CLIENT_KEYS_DIR` | Ключи. |
+| `WIREGUARD_CLIENT_CONFIG_DIR` | `.conf`, при необходимости `qr/`. |
+| Файл по `MTPROXY_LINK_FILE` | Ссылка MTProxy. |
 
-Эти пути не должны отдаваться как статика веб-сервера.
+Не отдавать эти пути как публичную статику.
 
-## Разработка и качество
+## Разработка и проверка кода
 
 ```shell
 venv/bin/python -m pip install -r requirements-test.txt
+venv/bin/python -m black -l 100 manage_site
 venv/bin/python -m flake8 manage_site
 ```
 
+## Перед публикацией репозитория
+
+- Убедиться, что в индекс не попали секреты (`settings.env` с прод-значениями, ключи, личные пути).
+- Каталог **`.history/`** (резервы редактора) в **`.gitignore`**; локальные копии можно удалить.
+- Каталоги **`.idea/`**, **`.run/`**, **`.cursor/`** обычно не нужны в публичном клоне — при необходимости добавьте в `.gitignore` или не коммитьте (часть уже игнорируется).
+- Проверить `flake8` и при необходимости `black` по командам выше.
+
 ---
 
-Пакет приложения: **`manage_site`**, экземпляр Flask: **`selfvpn_app`**.
+WSGI: **`manage_site.selfvpn_app:selfvpn_app`**.

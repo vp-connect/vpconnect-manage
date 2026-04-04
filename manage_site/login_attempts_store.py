@@ -1,4 +1,9 @@
-"""Учёт неудачных попыток входа по IP (JSON + lock для одного процесса)."""
+"""
+Учёт неудачных попыток входа по IP-адресу в JSON-файле.
+
+Один процесс Flask сериализует доступ через ``threading.Lock``. После превышения лимита
+выставляется ``locked_until`` (ISO UTC); успешный вход очищает запись IP.
+"""
 
 from __future__ import annotations
 
@@ -12,29 +17,33 @@ _lock = threading.Lock()
 
 
 def _utcnow() -> datetime:
+    """Текущее время в UTC с tzinfo."""
     return datetime.now(timezone.utc)
 
 
 def _parse_iso(s: str) -> datetime:
-    return datetime.fromisoformat(s.replace('Z', '+00:00'))
+    """Разбор ISO-строки времени (поддержка суффикса Z)."""
+    return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
 def _load_raw(path: Path) -> dict[str, Any]:
+    """Прочитать JSON-объект с записями по IP или пустой dict."""
     if not path.is_file():
         return {}
-    with path.open(encoding='utf-8') as f:
+    with path.open(encoding="utf-8") as f:
         data = json.load(f)
     return data if isinstance(data, dict) else {}
 
 
 def _prune(data: dict[str, Any], now: datetime) -> None:
+    """Удалить просроченные и пустые записи из словаря (in-place)."""
     dead: list[str] = []
     for ip, entry in list(data.items()):
         if not isinstance(entry, dict):
             dead.append(ip)
             continue
-        lu = entry.get('locked_until')
-        failures = int(entry.get('failures') or 0)
+        lu = entry.get("locked_until")
+        failures = int(entry.get("failures") or 0)
         if lu:
             try:
                 until = _parse_iso(str(lu))
@@ -50,16 +59,22 @@ def _prune(data: dict[str, Any], now: datetime) -> None:
 
 
 def _save(path: Path, data: dict[str, Any]) -> None:
+    """Атомарная запись JSON на диск."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + '.tmp')
-    with tmp.open('w', encoding='utf-8') as f:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-        f.write('\n')
+        f.write("\n")
     tmp.replace(path)
 
 
 def purge_expired(path: Path) -> None:
-    """Удалить из файла просроченные блокировки и пустые записи (удобно при старте приложения)."""
+    """
+    Удалить просроченные блокировки и пустые записи (удобно вызывать при старте приложения).
+
+    Args:
+        path: путь к ``login_attempts.json``.
+    """
     with _lock:
         now = _utcnow()
         data = _load_raw(path)
@@ -68,7 +83,12 @@ def purge_expired(path: Path) -> None:
 
 
 def is_locked(path: Path, client_ip: str) -> tuple[bool, datetime | None]:
-    """Активна ли блокировка для IP; если да — время окончания (UTC)."""
+    """
+    Проверить, активна ли блокировка для IP.
+
+    Returns:
+        (заблокирован, время окончания UTC или None).
+    """
     with _lock:
         now = _utcnow()
         data = _load_raw(path)
@@ -77,7 +97,7 @@ def is_locked(path: Path, client_ip: str) -> tuple[bool, datetime | None]:
         if not isinstance(entry, dict):
             _save(path, data)
             return False, None
-        lu = entry.get('locked_until')
+        lu = entry.get("locked_until")
         if not lu:
             _save(path, data)
             return False, None
@@ -89,7 +109,7 @@ def is_locked(path: Path, client_ip: str) -> tuple[bool, datetime | None]:
         if until > now:
             _save(path, data)
             return True, until
-        entry.pop('locked_until', None)
+        entry.pop("locked_until", None)
         _save(path, data)
         return False, None
 
@@ -100,6 +120,11 @@ def record_failure(
     max_attempts: int,
     lockout_minutes: int,
 ) -> None:
+    """
+    Увеличить счётчик неудач для IP; при достижении ``max_attempts`` выставить блокировку.
+
+    Если IP уже в активной блокировке, ничего не меняет.
+    """
     with _lock:
         now = _utcnow()
         data = _load_raw(path)
@@ -108,24 +133,25 @@ def record_failure(
         if not isinstance(entry, dict):
             entry = {}
             data[client_ip] = entry
-        lu = entry.get('locked_until')
+        lu = entry.get("locked_until")
         if lu:
             try:
                 if _parse_iso(str(lu)) > now:
                     _save(path, data)
                     return
             except (TypeError, ValueError):
-                entry.pop('locked_until', None)
-        failures = int(entry.get('failures') or 0) + 1
-        entry['failures'] = failures
+                entry.pop("locked_until", None)
+        failures = int(entry.get("failures") or 0) + 1
+        entry["failures"] = failures
         if failures >= max_attempts:
             until = now + timedelta(minutes=lockout_minutes)
-            entry['locked_until'] = until.isoformat()
-            entry['failures'] = 0
+            entry["locked_until"] = until.isoformat()
+            entry["failures"] = 0
         _save(path, data)
 
 
 def clear_ip(path: Path, client_ip: str) -> None:
+    """Удалить запись об IP (после успешного входа)."""
     with _lock:
         data = _load_raw(path)
         data.pop(client_ip, None)

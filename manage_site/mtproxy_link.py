@@ -1,4 +1,9 @@
-"""Чтение ссылки MTProxy / Telegram proxy из файла, путь задаётся в настройках."""
+"""
+Чтение ссылки Telegram MTProxy из файла, путь задаётся ``MTPROXY_LINK_FILE`` в настройках.
+
+Пустой параметр в настройках отключает функцию; относительные пути считаются от корня репозитория
+(родитель каталога ``manage_site``), не от cwd процесса.
+"""
 
 from __future__ import annotations
 
@@ -6,28 +11,32 @@ from pathlib import Path
 
 from . import settings
 
-# корень репозитория: каталог выше пакета manage_site
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _resolved_path() -> Path:
-    raw = (settings.MTPROXY_LINK_FILE or '').strip()
+    """Абсолютный путь к файлу ссылки: expanduser, абсолютный или от корня репозитория."""
+    raw = (settings.MTPROXY_LINK_FILE or "").strip()
     p = Path(raw).expanduser()
     if p.is_absolute():
         return p.resolve()
-    # пути вида manage_site/data/... в .env считаются от корня репозитория, не от cwd
     return (_REPO_ROOT / p).resolve()
 
 
 def read_mtproxy_link() -> str | None:
-    """Первая непустая строка из файла или None, если параметр не задан / файла нет / пусто."""
-    if not (settings.MTPROXY_LINK_FILE or '').strip():
+    """
+    Вернуть первую непустую строку из файла или None.
+
+    Returns:
+        URL/строка прокси или None, если параметр не задан, файла нет или файл пуст.
+    """
+    if not (settings.MTPROXY_LINK_FILE or "").strip():
         return None
     path = _resolved_path()
     if not path.is_file():
         return None
     try:
-        text = path.read_text(encoding='utf-8')
+        text = path.read_text(encoding="utf-8")
     except OSError:
         return None
     for line in text.splitlines():
