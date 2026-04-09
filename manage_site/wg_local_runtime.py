@@ -135,10 +135,17 @@ def write_client_conf_file(
     (client_config_dir / "qr").mkdir(parents=True, exist_ok=True)
     path = client_config_dir / f"{wg_name}.conf"
     dns = (settings.WIREGUARD_DNS or "8.8.8.8").strip()
+    address_cidr = (settings.WIREGUARD_NETWORK_CIDR or "").strip()
+    if address_cidr:
+        # В установочных скриптах и нашей выдаче IP сейчас используется /24.
+        _ = wireguard_conf.subnet_prefix_from_network_cidr(address_cidr)
+        client_address = f"{tunnel_ip}/24"
+    else:
+        client_address = f"{tunnel_ip}/24"
     text = (
         "[Interface]\n"
         f"PrivateKey = {private_key}\n"
-        f"Address = {tunnel_ip}/24\n"
+        f"Address = {client_address}\n"
         f"DNS = {dns}\n"
         "\n"
         "[Peer]\n"

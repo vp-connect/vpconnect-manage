@@ -139,6 +139,26 @@ def server_subnet_prefix_from_conf(conf_path: Path) -> str:
     )
 
 
+def subnet_prefix_from_network_cidr(network_cidr: str) -> str:
+    """
+    Префикс `A.B.C.` из CIDR вида `A.B.C.D/24` или `A.B.C.0/24`.
+
+    Используется как источник истины, если сеть задана в настройках панели.
+    """
+    s = (network_cidr or "").strip()
+    m = ADDRESS_RE.match(s)
+    if not m:
+        raise ValueError("Ожидается IPv4 CIDR формата A.B.C.D/24")
+    ip = m.group(1)
+    prefix = int(m.group(2))
+    if prefix != 24:
+        raise ValueError("Сейчас поддерживается только /24 (как в установочных скриптах)")
+    parts = ip.split(".")
+    if len(parts) != 4:
+        raise ValueError("Ожидается IPv4 адрес")
+    return ".".join(parts[:3]) + "."
+
+
 def format_wg_conf(preamble: list[str], peers: list[WgPeerBlock]) -> str:
     """Собрать текст wg0.conf из преамбулы и списка блоков клиентов."""
     parts: list[str] = []

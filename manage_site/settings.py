@@ -48,6 +48,10 @@ WIREGUARD_INTERFACE_NAME = (
     get_str_env_param("WIREGUARD_INTERFACE_NAME", default="wg0") or ""
 ).strip() or "wg0"
 
+# CIDR сети WireGuard (например 10.8.0.1/24).
+# Используется для выдачи IP и Address в клиентских конфигах.
+WIREGUARD_NETWORK_CIDR = (get_str_env_param("WIREGUARD_NETWORK_CIDR", default="") or "").strip()
+
 WIREGUARD_ENDPOINT = (get_str_env_param("WIREGUARD_ENDPOINT", default="") or "").strip()
 
 WIREGUARD_PUBLIC_HOST = (get_str_env_param("WIREGUARD_PUBLIC_HOST", default="") or "").strip()

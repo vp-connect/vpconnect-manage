@@ -252,7 +252,12 @@ def create_client(name: str) -> dict[str, Any]:
         raise RuntimeError(f"Нет файла конфигурации WireGuard: {conf_path}")
 
     endpoint = wg_local_runtime.resolve_client_endpoint(conf_path)
-    subnet_prefix = wireguard_conf.server_subnet_prefix_from_conf(conf_path)
+    if (settings.WIREGUARD_NETWORK_CIDR or "").strip():
+        subnet_prefix = wireguard_conf.subnet_prefix_from_network_cidr(
+            settings.WIREGUARD_NETWORK_CIDR
+        )
+    else:
+        subnet_prefix = wireguard_conf.server_subnet_prefix_from_conf(conf_path)
 
     with _lock:
         peers = wireguard_conf.list_peers_from_conf(conf_path)
