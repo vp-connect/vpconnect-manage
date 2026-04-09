@@ -252,6 +252,7 @@ def create_client(name: str) -> dict[str, Any]:
         raise RuntimeError(f"Нет файла конфигурации WireGuard: {conf_path}")
 
     endpoint = wg_local_runtime.resolve_client_endpoint(conf_path)
+    subnet_prefix = wireguard_conf.server_subnet_prefix_from_conf(conf_path)
 
     with _lock:
         peers = wireguard_conf.list_peers_from_conf(conf_path)
@@ -264,7 +265,7 @@ def create_client(name: str) -> dict[str, Any]:
                 taken.add(w.strip())
 
         wg_name = _unique_wg_name(name, taken)
-        tunnel_ip = wireguard_conf.pick_free_tunnel_ip(peers)
+        tunnel_ip = wireguard_conf.pick_free_tunnel_ip(peers, subnet_prefix=subnet_prefix)
 
         priv, pub = wg_local_runtime.wg_gen_keypair()
         keys_dir = _ensure_keys_dir()

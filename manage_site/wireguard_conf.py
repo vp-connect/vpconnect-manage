@@ -17,6 +17,7 @@ from typing import Callable, Iterator
 
 CLIENT_MARKER_RE = re.compile(r"^#\s*Client:\s*(.+?)\s*$")
 PUBLIC_KEY_RE = re.compile(r"^\s*PublicKey\s*=\s*(\S+)\s*$")
+ADDRESS_RE = re.compile(r"^\s*Address\s*=\s*(\d{1,3}(?:\.\d{1,3}){3})/(\d+)\s*$")
 ALLOWED_IPS_RE = re.compile(
     r"^\s*AllowedIPs\s*=\s*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/(\d+)\s*$",
 )
@@ -114,6 +115,28 @@ def parse_wg_conf(path: Path) -> tuple[list[str], list[WgPeerBlock]]:
         if idx < len(lines) and lines[idx].strip() == "":
             idx += 1
     return (preamble, peers)
+
+
+def server_subnet_prefix_from_conf(conf_path: Path) -> str:
+    """
+    Определить /24 подсеть клиентов по первому `Address = ...` в конфиге сервера.
+
+    В bash-скрипте используется логика:
+    `10.8.0.1/24` → префикс `10.8.0.` и адреса клиентов `10.8.0.2..254`.
+    """
+    preamble, _ = parse_wg_conf(conf_path)
+    for line in preamble:
+        m = ADDRESS_RE.match(logical_config_line(line))
+        if not m:
+            continue
+        ip = m.group(1)
+        parts = ip.split(".")
+        if len(parts) != 4:
+            break
+        return ".".join(parts[:3]) + "."
+    raise RuntimeError(
+        f"Не удалось определить Address из {conf_path} (ожидается IPv4 Address = A.B.C.D/24)"
+    )
 
 
 def format_wg_conf(preamble: list[str], peers: list[WgPeerBlock]) -> str:

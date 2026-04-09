@@ -50,9 +50,9 @@ def resolve_client_endpoint(conf_path: Path) -> str:
     host = (settings.WIREGUARD_PUBLIC_HOST or "").strip()
     if not host:
         raise RuntimeError(
-            "Укажите WIREGUARD_ENDPOINT (например vpn.example.com:51820) "
-            "или WIREGUARD_PUBLIC_HOST (порт — из ListenPort в wg0.conf, "
-            "из WIREGUARD_LISTEN_PORT при ненулевом значении или 51820)."
+            "Не удалось определить Endpoint. Укажите WIREGUARD_ENDPOINT, "
+            "или WIREGUARD_PUBLIC_HOST (порт — ListenPort/WIREGUARD_LISTEN_PORT/51820), "
+            "или задайте полный host:port через WIREGUARD_ENDPOINT."
         )
     lp = settings.WIREGUARD_LISTEN_PORT or 0
     if lp > 0:
@@ -67,6 +67,7 @@ def server_public_key_from_interface(conf_path: Path) -> str | None:
     """
     Публичный ключ сервера из ``PrivateKey`` в преамбуле wg0.conf (через ``wg pubkey``).
     """
+    # Вычислить через `wg pubkey` из PrivateKey в wg0.conf (полезно в dev и при наличии PrivateKey).
     preamble, _ = wireguard_conf.parse_wg_conf(conf_path)
     priv: str | None = None
     for line in preamble:
