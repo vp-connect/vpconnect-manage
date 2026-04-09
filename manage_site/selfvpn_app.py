@@ -194,10 +194,10 @@ def clients_create():
     if name:
         try:
             vpn_clients_service.create_client(name)
-        except ValueError:
-            pass
         except RuntimeError as e:
             flash(str(e), "error")
+        except Exception:
+            flash("Не удалось создать клиента (внутренняя ошибка).", "error")
     return redirect(url_for("home"))
 
 

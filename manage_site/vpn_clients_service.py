@@ -252,12 +252,18 @@ def create_client(name: str) -> dict[str, Any]:
         raise RuntimeError(f"Нет файла конфигурации WireGuard: {conf_path}")
 
     endpoint = wg_local_runtime.resolve_client_endpoint(conf_path)
-    if (settings.WIREGUARD_NETWORK_CIDR or "").strip():
-        subnet_prefix = wireguard_conf.subnet_prefix_from_network_cidr(
-            settings.WIREGUARD_NETWORK_CIDR
-        )
-    else:
-        subnet_prefix = wireguard_conf.server_subnet_prefix_from_conf(conf_path)
+    try:
+        if (settings.WIREGUARD_NETWORK_CIDR or "").strip():
+            subnet_prefix = wireguard_conf.subnet_prefix_from_network_cidr(
+                settings.WIREGUARD_NETWORK_CIDR
+            )
+        else:
+            subnet_prefix = wireguard_conf.server_subnet_prefix_from_conf(conf_path)
+    except ValueError as e:
+        raise RuntimeError(
+            "Некорректная настройка WIREGUARD_NETWORK_CIDR. "
+            "Ожидается IPv4 CIDR формата A.B.C.D/24 (например 10.8.0.1/24)."
+        ) from e
 
     with _lock:
         peers = wireguard_conf.list_peers_from_conf(conf_path)
