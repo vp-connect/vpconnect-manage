@@ -276,15 +276,23 @@ def collect_used_tunnel_ips(peers: list[WgPeerBlock]) -> set[str]:
 
 def pick_free_tunnel_ip(
     peers: list[WgPeerBlock],
-    subnet_prefix: str = "10.0.0.",
+    subnet_prefix: str,
 ) -> str:
-    """Свободный адрес ``10.0.0.2``–``10.0.0.254`` не занятый в ``AllowedIPs`` пиров."""
+    """
+    Найти свободный адрес в сети WireGuard.
+
+    Диапазон поиска: ``<prefix>2``–``<prefix>254`` (как в установочных скриптах для /24).
+    Параметр ``subnet_prefix`` должен быть вычислен уровнем выше из:
+
+    - ``WIREGUARD_NETWORK_CIDR`` (настройка панели), либо
+    - ``Address = ...`` в серверном ``wg0.conf`` (fallback).
+    """
     used = collect_used_tunnel_ips(peers)
     for n in range(2, 255):
         candidate = f"{subnet_prefix}{n}"
         if candidate not in used:
             return candidate
-    raise RuntimeError("Не осталось свободных адресов 10.0.0.2–10.0.0.254")
+    raise RuntimeError(f"Не осталось свободных адресов {subnet_prefix}2–{subnet_prefix}254")
 
 
 def try_run_wg_syncconf(
