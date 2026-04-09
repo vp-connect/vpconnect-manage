@@ -18,6 +18,7 @@ from typing import Callable, Iterator
 CLIENT_MARKER_RE = re.compile(r"^#\s*Client:\s*(.+?)\s*$")
 PUBLIC_KEY_RE = re.compile(r"^\s*PublicKey\s*=\s*(\S+)\s*$")
 ADDRESS_RE = re.compile(r"^\s*Address\s*=\s*(\d{1,3}(?:\.\d{1,3}){3})/(\d+)\s*$")
+CIDR_RE = re.compile(r"^\s*(\d{1,3}(?:\.\d{1,3}){3})/(\d+)\s*$")
 ALLOWED_IPS_RE = re.compile(
     r"^\s*AllowedIPs\s*=\s*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/(\d+)\s*$",
 )
@@ -146,7 +147,7 @@ def subnet_prefix_from_network_cidr(network_cidr: str) -> str:
     Используется как источник истины, если сеть задана в настройках панели.
     """
     s = (network_cidr or "").strip()
-    m = ADDRESS_RE.match(s)
+    m = CIDR_RE.match(s)
     if not m:
         raise ValueError("Ожидается IPv4 CIDR формата A.B.C.D/24")
     ip = m.group(1)
