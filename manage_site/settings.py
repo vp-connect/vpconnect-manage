@@ -1,9 +1,19 @@
 """
-Параметры приложения из env-settings: загрузка ``settings.env`` и константы конфигурации.
+Конфигурация приложения: **env-settings** + корневой ``settings.env``.
 
-Новые переменные: объявить здесь через ``get_*_env_param``,
-затем добавить строку в корневой ``settings.env``.
-Путь к файлу переменных задаётся ``ENV_FILENAME`` (по умолчанию ``settings.env``).
+Назначение
+    Централизованное чтение переменных окружения и объявление констант, которые
+    используют маршруты Flask и сервисы (пути к JSON, WireGuard, MTProxy).
+
+Зависимости
+    Внешний пакет ``env_settings`` (``configure``, ``load_env_params``, ``get_*_env_param``).
+    Файл переменных задаётся ``ENV_FILENAME`` (по умолчанию ``settings.env`` в корне репо).
+
+Кто читает этот модуль
+    Почти все подмодули ``manage_site`` импортируют ``settings`` для путей и флагов.
+
+Новые параметры
+    Сначала объявление через ``get_*_env_param`` здесь, затем строка в ``settings.env``.
 """
 
 from pathlib import Path
@@ -75,10 +85,24 @@ MTPROXY_LINK_FILE = (get_str_env_param("MTPROXY_LINK_FILE", default="") or "").s
 
 
 def wireguard_enabled() -> bool:
-    """True, если задан путь к wg0.conf и включена интеграция с WireGuard."""
+    """
+    Проверить, включена ли интеграция с WireGuard в панели.
+
+    Прецедент: перед маршрутами и сервисами, где нужен ``wg0.conf``.
+
+    Returns:
+        ``True``, если в настройках задан непустой ``WIREGUARD_CONF_PATH``.
+    """
     return bool(WIREGUARD_CONF_PATH)
 
 
 def mtproxy_enabled() -> bool:
-    """True, если задан путь к файлу со ссылкой MTProxy."""
+    """
+    Проверить, показывать ли блок MTProxy (ссылка из файла).
+
+    Прецедент: дашборд, QR MTProxy.
+
+    Returns:
+        ``True``, если задан непустой ``MTPROXY_LINK_FILE``.
+    """
     return bool(MTPROXY_LINK_FILE)

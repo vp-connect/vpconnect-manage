@@ -1,8 +1,16 @@
 """
-Чтение ссылки Telegram MTProxy из файла, путь задаётся ``MTPROXY_LINK_FILE`` в настройках.
+Чтение **строки MTProxy** из файла на диске (Telegram proxy link).
 
-Пустой параметр в настройках отключает функцию; относительные пути считаются от корня репозитория
-(родитель каталога ``manage_site``), не от cwd процесса.
+Назначение
+    Отдать первую непустую строку из файла, путь к которому задаётся в настройках
+    ``MTPROXY_LINK_FILE``, для дашборда и QR.
+
+Зависимости
+    ``settings.MTPROXY_LINK_FILE``. Путь к файлу: абсолютный после ``expanduser``,
+    иначе **от корня репозитория** (родитель ``manage_site``), не от ``cwd``.
+
+Кто вызывает
+    ``selfvpn_app.home``, ``selfvpn_app.telegram_proxy_qr_png``.
 """
 
 from __future__ import annotations
@@ -15,7 +23,12 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _resolved_path() -> Path:
-    """Абсолютный путь к файлу ссылки: expanduser, абсолютный или от корня репозитория."""
+    """
+    Абсолютный путь к файлу ссылки.
+
+    Returns:
+        ``Path.resolve()`` для абсолютного ``MTPROXY_LINK_FILE`` или ``_REPO_ROOT / относительный``.
+    """
     raw = (settings.MTPROXY_LINK_FILE or "").strip()
     p = Path(raw).expanduser()
     if p.is_absolute():
@@ -25,10 +38,13 @@ def _resolved_path() -> Path:
 
 def read_mtproxy_link() -> str | None:
     """
-    Вернуть первую непустую строку из файла или None.
+    Прочитать первую непустую строку из файла MTProxy.
+
+    Прецедент: главная страница (текст ссылки), генерация PNG QR.
 
     Returns:
-        URL/строка прокси или None, если параметр не задан, файла нет или файл пуст.
+        Строка (``tg://…`` или иной URL) или ``None``, если настройка пуста,
+        файла нет, чтение не удалось или в файле только пустые строки.
     """
     if not (settings.MTPROXY_LINK_FILE or "").strip():
         return None

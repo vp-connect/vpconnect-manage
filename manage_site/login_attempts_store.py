@@ -1,8 +1,20 @@
 """
-Учёт неудачных попыток входа по IP-адресу в JSON-файле.
+Блокировка входа по **IP** в JSON (счётчик неудач и ``locked_until``).
 
-Один процесс Flask сериализует доступ через ``threading.Lock``. После превышения лимита
-выставляется ``locked_until`` (ISO UTC); успешный вход очищает запись IP.
+Назначение
+    Защита формы ``/login``: после ``LOGIN_MAX_FAILED_ATTEMPTS`` неверных попыток с
+    одного IP выставляется блокировка на ``LOGIN_LOCKOUT_MINUTES`` минут.
+
+Зависимости
+    Только стандартная библиотека. Путь к файлу передаётся аргументом (обычно
+    ``settings.LOGIN_ATTEMPTS_JSON_PATH``).
+
+Кто вызывает
+    ``selfvpn_app.login`` (проверка, запись неудачи, сброс при успехе),
+    ``selfvpn_app`` при старте — ``purge_expired``.
+
+Потокобезопасность
+    Один процесс Flask: доступ к файлу сериализуется ``threading.Lock``.
 """
 
 from __future__ import annotations
@@ -17,17 +29,33 @@ _lock = threading.Lock()
 
 
 def _utcnow() -> datetime:
-    """Текущее время в UTC с tzinfo."""
+    """Текущее время UTC с ``tzinfo`` (для сравнения с ``locked_until``)."""
     return datetime.now(timezone.utc)
 
 
 def _parse_iso(s: str) -> datetime:
-    """Разбор ISO-строки времени (поддержка суффикса Z)."""
+    """
+    Разобрать ISO-время из JSON (в т.ч. с суффиксом ``Z``).
+
+    Args:
+        s: строка из поля ``locked_until``.
+
+    Raises:
+        ValueError: при неразборчивом формате (пробрасывается из ``fromisoformat``).
+    """
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
 def _load_raw(path: Path) -> dict[str, Any]:
-    """Прочитать JSON-объект с записями по IP или пустой dict."""
+    """
+    Загрузить сырой словарь IP → запись или пустой dict.
+
+    Args:
+        path: ``login_attempts.json``.
+
+    Returns:
+        Словарь; если файл отсутствует или корень не dict — ``{}``.
+    """
     if not path.is_file():
         return {}
     with path.open(encoding="utf-8") as f:
@@ -36,7 +64,13 @@ def _load_raw(path: Path) -> dict[str, Any]:
 
 
 def _prune(data: dict[str, Any], now: datetime) -> None:
-    """Удалить просроченные и пустые записи из словаря (in-place)."""
+    """
+    Удалить устаревшие и мусорные записи **in-place** перед чтением/записью.
+
+    Args:
+        data: содержимое файла попыток.
+        now: момент сравнения (обычно ``_utcnow()``).
+    """
     dead: list[str] = []
     for ip, entry in list(data.items()):
         if not isinstance(entry, dict):
@@ -59,7 +93,7 @@ def _prune(data: dict[str, Any], now: datetime) -> None:
 
 
 def _save(path: Path, data: dict[str, Any]) -> None:
-    """Атомарная запись JSON на диск."""
+    """Атомарно записать JSON (через ``.tmp`` + ``replace``)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     with tmp.open("w", encoding="utf-8") as f:
@@ -70,7 +104,7 @@ def _save(path: Path, data: dict[str, Any]) -> None:
 
 def purge_expired(path: Path) -> None:
     """
-    Удалить просроченные блокировки и пустые записи (удобно вызывать при старте приложения).
+    Очистить просроченные блокировки и пустые записи (удобно при старте приложения).
 
     Args:
         path: путь к ``login_attempts.json``.
@@ -84,10 +118,17 @@ def purge_expired(path: Path) -> None:
 
 def is_locked(path: Path, client_ip: str) -> tuple[bool, datetime | None]:
     """
-    Проверить, активна ли блокировка для IP.
+    Проверить, активна ли блокировка для данного IP.
+
+    Прецедент: GET/POST ``/login`` — показать сообщение о блокировке.
+
+    Args:
+        path: файл попыток.
+        client_ip: ключ записи (как возвращает ``request.remote_addr`` или ``"unknown"``).
 
     Returns:
-        (заблокирован, время окончания UTC или None).
+        ``(True, until)`` если ``locked_until`` в будущем; иначе ``(False, None)``.
+        При повреждённых данных запись может быть очищена и сохранена.
     """
     with _lock:
         now = _utcnow()
@@ -121,9 +162,19 @@ def record_failure(
     lockout_minutes: int,
 ) -> None:
     """
-    Увеличить счётчик неудач для IP; при достижении ``max_attempts`` выставить блокировку.
+    Учесть одну неверную попытку входа для IP.
 
-    Если IP уже в активной блокировке, ничего не меняет.
+    Прецедент: POST ``/login`` с неверным паролем (и непустым полем пароля).
+
+    Args:
+        path: файл попыток.
+        client_ip: IP клиента.
+        max_attempts: порог для блокировки (из ``LOGIN_MAX_FAILED_ATTEMPTS``).
+        lockout_minutes: длительность блокировки (из ``LOGIN_LOCKOUT_MINUTES``).
+
+    Поведение:
+        Если IP уже в активной блокировке — выход без изменений. Иначе увеличить
+        ``failures``; при достижении порога выставить ``locked_until`` (ISO) и обнулить счётчик.
     """
     with _lock:
         now = _utcnow()
@@ -151,7 +202,13 @@ def record_failure(
 
 
 def clear_ip(path: Path, client_ip: str) -> None:
-    """Удалить запись об IP (после успешного входа)."""
+    """
+    Удалить запись об IP (после успешного входа).
+
+    Args:
+        path: файл попыток.
+        client_ip: IP, для которого сбрасываем счётчик/блокировку.
+    """
     with _lock:
         data = _load_raw(path)
         data.pop(client_ip, None)

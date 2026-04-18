@@ -1,8 +1,20 @@
 """
-Flask-приложение vpconnect-manage: авторизация администратора, дашборд, WireGuard, MTProxy.
+Flask-приложение **vpconnect-manage**: вход администратора, дашборд, WireGuard, MTProxy.
 
-Точка входа для WSGI: объект ``selfvpn_app``. При импорте выполняется загрузка настроек,
-очистка устаревших блокировок входа и при необходимости стартовая синхронизация WireGuard.
+Назначение
+    HTTP-слой над сервисами: сессия, формы, отдача шаблонов и бинарных ответов (QR, ``.conf``).
+
+Зависимости (внутренние модули)
+    ``settings``, ``admin_user_store``, ``login_attempts_store``, ``mtproxy_link``,
+    ``telegram_proxy_qr``, ``vpn_clients_service``, ``wg_background_sync``.
+
+Побочные эффекты при импорте
+    Загрузка ``settings``, ``purge_expired`` для файла попыток входа, возможное создание
+    ``admin_user.json`` из ``ADMIN_DEFAULT_PASSWORD``, кэш MD5 пароля, регистрация
+    фоновой синхронизации WireGuard.
+
+Точка входа WSGI
+    Объект ``selfvpn_app`` (экземпляр ``Flask``).
 """
 
 from __future__ import annotations
@@ -40,7 +52,14 @@ login_attempts_store.purge_expired(settings.LOGIN_ATTEMPTS_JSON_PATH)
 
 
 def _load_admin_password_md5() -> str | None:
-    """Прочитать MD5 пароля администратора из admin_user.json или None."""
+    """
+    Прочитать MD5 пароля администратора из ``admin_user.json``.
+
+    Прецедент: при импорте модуля и после смены пароля через ``_reload_admin_password_md5``.
+
+    Returns:
+        32 символа hex в нижнем регистре или ``None`` (нет файла, битый JSON, нет поля).
+    """
     path = settings.ADMIN_USER_JSON_PATH
     if not path.is_file():
         return None
@@ -60,18 +79,48 @@ _ADMIN_PASSWORD_MD5 = _load_admin_password_md5()
 
 
 def _reload_admin_password_md5() -> None:
-    """Обновить кэш MD5 после смены пароля через UI."""
+    """Обновить модульный кэш ``_ADMIN_PASSWORD_MD5`` после успешной записи пароля на диск."""
     global _ADMIN_PASSWORD_MD5
     _ADMIN_PASSWORD_MD5 = _load_admin_password_md5()
 
 
+def _try_save_admin_password_plain(plain: str) -> bool:
+    """
+    Сохранить MD5 от пароля в открытом виде.
+
+    Args:
+        plain: пароль до хэширования.
+
+    Returns:
+        ``True`` при успехе; ``False`` при ``ValueError`` из хранилища.
+    """
+    try:
+        admin_user_store.save_password_md5_hex(hashlib.md5(plain.encode("utf-8")).hexdigest())
+    except ValueError:
+        return False
+    return True
+
+
 def _client_ip() -> str:
-    """IP клиента запроса (без разбора X-Forwarded-For)."""
+    """
+    IP клиента текущего запроса.
+
+    Returns:
+        ``request.remote_addr`` или ``\"unknown\"``, если адрес не задан.
+    """
     return request.remote_addr or "unknown"
 
 
 def _password_ok(plain: str) -> bool:
-    """Проверка пароля входа по сохранённому MD5 (сравнение без утечки по времени)."""
+    """
+    Сравнить введённый пароль с кэшированным MD5 (без утечки по времени).
+
+    Args:
+        plain: пароль из формы входа.
+
+    Returns:
+        ``True``, если MD5 совпадает с ``_ADMIN_PASSWORD_MD5`` (длина кэша 32).
+    """
     stored = _ADMIN_PASSWORD_MD5
     if stored is None or len(stored) != 32:
         return False
@@ -81,7 +130,11 @@ def _password_ok(plain: str) -> bool:
 
 @selfvpn_app.before_request
 def require_login():
-    """Редирект на /login для всех маршрутов кроме login, logout и static."""
+    """
+    Требовать сессию администратора для всех маршрутов, кроме исключений.
+
+    Исключения: ``login``, ``logout``, ``static``.
+    """
     if request.endpoint in ("login", "logout", "static"):
         return
     if session.get("admin_authenticated"):
@@ -90,7 +143,18 @@ def require_login():
 
 
 def _require_client_uuid(client_id: str) -> str:
-    """Проверить, что client_id — UUID; иначе 404."""
+    """
+    Убедиться, что ``client_id`` — UUID.
+
+    Args:
+        client_id: сегмент URL.
+
+    Returns:
+        Тот же ``client_id`` при успехе.
+
+    Raises:
+        HTTP 404: при невалидном UUID (через ``abort``).
+    """
     try:
         uuid_mod.UUID(client_id)
     except ValueError:
@@ -99,14 +163,22 @@ def _require_client_uuid(client_id: str) -> str:
 
 
 def _require_wireguard() -> None:
-    """Ответ 404, если интеграция WireGuard отключена в настройках."""
+    """
+    Завершить запрос 404, если интеграция WireGuard выключена.
+
+    Прецедент: маршруты под ``/clients/...``.
+    """
     if not settings.wireguard_enabled():
         abort(404)
 
 
 @selfvpn_app.route("/")
 def home():
-    """Главная страница: опционально клиенты WG и блок MTProxy."""
+    """
+    Главная страница дашборда: список клиентов WG и/или блок MTProxy.
+
+    Данные клиентов при включённом WG синхронизируются с ``wg0.conf`` перед рендером.
+    """
     wireguard_enabled = settings.wireguard_enabled()
     mtproxy_enabled = settings.mtproxy_enabled()
     clients = (
@@ -124,7 +196,12 @@ def home():
 
 @selfvpn_app.get("/telegram-proxy/qr.png")
 def telegram_proxy_qr_png():
-    """PNG QR-кода со ссылкой MTProxy."""
+    """
+    PNG с QR-кодом ссылки MTProxy.
+
+    Returns:
+        ``Response`` с ``image/png`` или 404, если MTProxy выключен, ссылки нет или QR не собрать.
+    """
     if not settings.mtproxy_enabled():
         abort(404)
     url = mtproxy_link.read_mtproxy_link()
@@ -139,14 +216,20 @@ def telegram_proxy_qr_png():
 
 @selfvpn_app.post("/logout")
 def logout():
-    """Завершить сессию администратора."""
+    """Очистить сессию и отправить на форму входа."""
     session.clear()
     return redirect(url_for("login"))
 
 
 @selfvpn_app.post("/account/admin-password")
 def admin_password():
-    """Сохранить новый пароль администратора или сбросить на ADMIN_DEFAULT_PASSWORD."""
+    """
+    Смена или сброс пароля администратора (POST form).
+
+    Поля формы:
+        ``action`` — ``reset`` (на ``ADMIN_DEFAULT_PASSWORD``) или ``save`` (новый пароль).
+        При ``save``: ``password``, ``password_confirm`` должны совпадать и быть непустыми.
+    """
     action = (request.form.get("action") or "").strip()
     if action == "reset":
         default = (settings.ADMIN_DEFAULT_PASSWORD or "").strip()
@@ -156,9 +239,7 @@ def admin_password():
                 "error",
             )
             return redirect(url_for("home"))
-        try:
-            admin_user_store.save_password_md5_hex(hashlib.md5(default.encode("utf-8")).hexdigest())
-        except ValueError:
+        if not _try_save_admin_password_plain(default):
             flash("Не удалось сохранить пароль.", "error")
             return redirect(url_for("home"))
         _reload_admin_password_md5()
@@ -174,9 +255,7 @@ def admin_password():
         if p1 != p2:
             flash("Пароли не совпадают.", "error")
             return redirect(url_for("home"))
-        try:
-            admin_user_store.save_password_md5_hex(hashlib.md5(p1.encode("utf-8")).hexdigest())
-        except ValueError:
+        if not _try_save_admin_password_plain(p1):
             flash("Не удалось сохранить пароль.", "error")
             return redirect(url_for("home"))
         _reload_admin_password_md5()
@@ -188,7 +267,11 @@ def admin_password():
 
 @selfvpn_app.post("/clients")
 def clients_create():
-    """POST: создать клиента WireGuard."""
+    """
+    Создать клиента WireGuard по имени из формы (поле ``name``).
+
+    Ошибки ``RuntimeError`` показываются через ``flash``; прочие — общее сообщение.
+    """
     _require_wireguard()
     name = (request.form.get("name") or "").strip()
     if name:
@@ -203,7 +286,12 @@ def clients_create():
 
 @selfvpn_app.post("/clients/<client_id>/toggle")
 def clients_toggle(client_id):
-    """POST: включить или выключить клиента в wg0.conf."""
+    """
+    Включить/выключить пира в ``wg0.conf`` (форма: ``enabled`` == ``\"1\"`` для включения).
+
+    Args:
+        client_id: UUID клиента из JSON.
+    """
     _require_wireguard()
     client_id = _require_client_uuid(client_id)
     enabled = request.form.get("enabled") == "1"
@@ -216,7 +304,7 @@ def clients_toggle(client_id):
 
 @selfvpn_app.get("/clients/<client_id>/qr.png")
 def clients_qr_png(client_id):
-    """GET: QR-код с текстом клиентского .conf."""
+    """PNG QR с текстом клиентского ``.conf`` (или 404)."""
     _require_wireguard()
     client_id = _require_client_uuid(client_id)
     try:
@@ -228,7 +316,7 @@ def clients_qr_png(client_id):
 
 @selfvpn_app.get("/clients/<client_id>/config.conf")
 def clients_config_download(client_id):
-    """GET: скачивание файла конфигурации клиента."""
+    """Скачивание клиентского ``.conf`` (или 404)."""
     _require_wireguard()
     client_id = _require_client_uuid(client_id)
     try:
@@ -245,7 +333,7 @@ def clients_config_download(client_id):
 
 @selfvpn_app.post("/clients/<client_id>/delete")
 def clients_delete(client_id):
-    """POST: удалить клиента и пир из wg0.conf."""
+    """Удалить клиента из JSON и артефакты WG (или 404)."""
     _require_wireguard()
     client_id = _require_client_uuid(client_id)
     try:
@@ -257,7 +345,11 @@ def clients_delete(client_id):
 
 @selfvpn_app.route("/login", methods=["GET", "POST"])
 def login():
-    """Форма входа: проверка пароля, блокировка по IP, сообщения об ошибках."""
+    """
+    Форма входа: GET — страница; POST — проверка пароля и учёт блокировок по IP.
+
+    Шаблон ``login.html`` получает флаги ``config_error``, ``locked``, ``wrong_password`` и т.д.
+    """
     if session.get("admin_authenticated"):
         return redirect(url_for("home"))
 
@@ -329,7 +421,15 @@ def login():
 
 @selfvpn_app.template_filter("fmt_lockout_utc")
 def fmt_lockout_utc(dt):
-    """Форматирование времени окончания блокировки для шаблонов (UTC)."""
+    """
+    Jinja-фильтр: время окончания блокировки в UTC для отображения.
+
+    Args:
+        dt: ``datetime`` или ``None``.
+
+    Returns:
+        Строка ``дд.мм.гггг чч:мм UTC`` или пустая строка.
+    """
     if dt is None:
         return ""
     if dt.tzinfo is None:

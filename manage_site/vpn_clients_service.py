@@ -1,8 +1,20 @@
 """
-Учёт VPN-клиентов в JSON и синхронизация с серверным wg0.conf.
+Сервис **VPN-клиентов WireGuard**: JSON ``vpn_clients.json`` и серверный ``wg0.conf``.
 
-При включённом ``WIREGUARD_CONF_PATH`` список и статусы пиров подтягиваются из конфига;
-создание, переключение и удаление обновляют wg0.conf, ключи на диске и клиентские .conf.
+Назначение
+    Хранить список клиентов в JSON, синхронизировать его с маркерами ``# Client:`` в
+    ``wg0.conf``, создавать/удалять/включать пиров, ключи на диске и клиентские ``.conf``/QR.
+
+Зависимости
+    ``settings`` (пути, флаги WG), ``wireguard_conf`` (разбор/запись ``wg0.conf``),
+    ``wg_local_runtime`` (ключи, endpoint, публичный ключ сервера, ``wg syncconf``),
+    ``qrcode`` для PNG.
+
+Кто вызывает
+    ``selfvpn_app`` (маршруты дашборда), ``wg_background_sync`` (фоновая синхронизация).
+
+Потокобезопасность
+    Операции с JSON и конфигом сериализуются ``threading.RLock``.
 """
 
 from __future__ import annotations
@@ -28,7 +40,15 @@ _log = logging.getLogger(__name__)
 
 
 def ascii_slug(name: str) -> str:
-    """Латинский slug для имён файлов (кириллица транслитерируется упрощённо)."""
+    """
+    Латинский slug для имён файлов и маркеров (кириллица — упрощённая транслитерация).
+
+    Args:
+        name: отображаемое имя пользователя.
+
+    Returns:
+        Строка ``[a-z0-9_]+`` или ``\"user\"``, если после нормализации пусто.
+    """
     t = (name or "").strip().lower()
     for a, b in (
         ("щ", "sch"),
@@ -57,7 +77,12 @@ def ascii_slug(name: str) -> str:
 
 
 def _keys_base_path() -> Path:
-    """Каталог ключей клиентов (абсолютный путь)."""
+    """
+    Абсолютный каталог ключей клиентов (``WIREGUARD_CLIENT_KEYS_DIR``).
+
+    Returns:
+        ``Path.resolve()``; относительный путь в настройках разрешается от ``cwd``.
+    """
     p = Path(settings.WIREGUARD_CLIENT_KEYS_DIR)
     if not p.is_absolute():
         p = Path.cwd() / p
@@ -65,7 +90,12 @@ def _keys_base_path() -> Path:
 
 
 def _client_config_dir() -> Path:
-    """Каталог клиентских .conf: из настроек или рядом с каталогом ключей."""
+    """
+    Каталог клиентских ``.conf`` и подкаталога ``qr``.
+
+    Returns:
+        Явный ``WIREGUARD_CLIENT_CONFIG_DIR`` или ``<родитель_ключей>/client_config``.
+    """
     raw = (settings.WIREGUARD_CLIENT_CONFIG_DIR or "").strip()
     if raw:
         p = Path(raw).expanduser()
@@ -76,14 +106,24 @@ def _client_config_dir() -> Path:
 
 
 def _ensure_keys_dir() -> Path:
-    """Создать каталог ключей при отсутствии."""
+    """
+    Создать каталог ключей при отсутствии.
+
+    Returns:
+        Путь к каталогу ключей.
+    """
     base = _keys_base_path()
     base.mkdir(parents=True, exist_ok=True)
     return base
 
 
 def _ensure_client_config_dir() -> Path:
-    """Создать каталог клиентских конфигов и подкаталог ``qr``."""
+    """
+    Создать каталог клиентских конфигов и ``qr``.
+
+    Returns:
+        Путь к каталогу клиентских конфигов.
+    """
     d = _client_config_dir()
     qr = d / "qr"
     d.mkdir(parents=True, exist_ok=True)
@@ -92,7 +132,15 @@ def _ensure_client_config_dir() -> Path:
 
 
 def _load_document(path: Path) -> dict[str, Any]:
-    """Загрузить JSON-документ со списком клиентов или пустой шаблон."""
+    """
+    Загрузить JSON-документ со списком клиентов.
+
+    Args:
+        path: ``vpn_clients.json``.
+
+    Returns:
+        Словарь с ключом ``clients`` (список dict); при отсутствии/битых данных — шаблон.
+    """
     if not path.is_file():
         return {"clients": []}
     with path.open(encoding="utf-8") as f:
@@ -106,7 +154,13 @@ def _load_document(path: Path) -> dict[str, Any]:
 
 
 def _save_document(path: Path, data: dict[str, Any]) -> None:
-    """Атомарно сохранить JSON на диск."""
+    """
+    Атомарно сохранить JSON на диск (через ``.tmp`` + ``replace``).
+
+    Args:
+        path: целевой файл.
+        data: сериализуемый объект (обычно с ключом ``clients``).
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     with tmp.open("w", encoding="utf-8") as f:
@@ -116,7 +170,16 @@ def _save_document(path: Path, data: dict[str, Any]) -> None:
 
 
 def _unique_wg_name(display_name: str, taken: set[str]) -> str:
-    """Уникальное имя маркера ``# Client: …`` в wg0.conf."""
+    """
+    Уникальное имя маркера ``# Client: …`` в ``wg0.conf``.
+
+    Args:
+        display_name: имя пользователя (через ``ascii_slug``).
+        taken: уже занятые имена (пиры в конфиге и в JSON).
+
+    Returns:
+        Строка вида ``\"user_a1b2c3d4\"`` с суффиксом при коллизии.
+    """
     base = ascii_slug(display_name) or "user"
     short = uuid.uuid4().hex[:8]
     candidate = f"{base}_{short}"
@@ -131,7 +194,16 @@ def _merge_row_with_peer(
     row: dict[str, Any],
     peer: wireguard_conf.WgPeerBlock,
 ) -> bool:
-    """Обновить поля строки из блока пира; вернуть True, если что-то изменилось."""
+    """
+    Обновить поля строки JSON из актуального блока пира в ``wg0.conf``.
+
+    Args:
+        row: запись клиента (мутируется).
+        peer: блок с тем же ``wg_name``.
+
+    Returns:
+        ``True``, если хотя бы одно поле изменилось.
+    """
     changed = False
     ip = wireguard_conf.parse_peer_tunnel_ip(peer.body_lines)
     pub = wireguard_conf.parse_peer_public_key(peer.body_lines)
@@ -152,7 +224,12 @@ def _collect_kept_clients_from_json(
     clients: list[dict[str, Any]],
     by_wg: dict[str, wireguard_conf.WgPeerBlock],
 ) -> tuple[list[dict[str, Any]], set[str], bool]:
-    """Строки JSON, согласованные с конфигом; seen_wg — какие пиры уже учтены."""
+    """
+    Отфильтровать и обновить записи JSON, согласованные с ``wg0.conf``.
+
+    Returns:
+        ``(kept_rows, seen_wg_names, changed)``.
+    """
     kept: list[dict[str, Any]] = []
     seen_wg: set[str] = set()
     changed = False
@@ -177,7 +254,12 @@ def _append_json_rows_for_conf_only_peers(
     seen_wg: set[str],
     kept: list[dict[str, Any]],
 ) -> bool:
-    """Добавить в ``kept`` записи для пиров, есть в конфиге, но не в JSON."""
+    """
+    Добавить в ``kept`` строки для пиров, есть в ``wg0.conf``, но отсутствуют в JSON.
+
+    Returns:
+        ``True``, если добавлена хотя бы одна строка.
+    """
     changed = False
     for wgn, peer in by_wg.items():
         if wgn in seen_wg:
@@ -204,10 +286,16 @@ def _append_json_rows_for_conf_only_peers(
 
 def _merge_wg_into_document(doc: dict[str, Any], conf_path: Path) -> bool:
     """
-    Слить состояние пиров из wg0.conf в ``doc['clients']``.
+    Слить пиры из ``wg0.conf`` в ``doc[\"clients\"]``.
 
-    Записи без ``wg_name`` отбрасываются; пиры только в конфиге добавляются в JSON.
-    Возвращает True, если документ изменился и его нужно сохранить.
+    Записи без валидного ``wg_name`` отбрасываются; пиры только в конфиге добавляются.
+
+    Args:
+        doc: документ в памяти (ключ ``clients`` будет заменён при изменениях).
+        conf_path: путь к ``wg0.conf``.
+
+    Returns:
+        ``True``, если нужно сохранить JSON на диск.
     """
     peers = wireguard_conf.list_peers_from_conf(conf_path)
     by_wg: dict[str, wireguard_conf.WgPeerBlock] = {p.name: p for p in peers}
@@ -228,7 +316,12 @@ def _merge_wg_into_document(doc: dict[str, Any], conf_path: Path) -> bool:
 
 
 def list_clients() -> list[dict[str, Any]]:
-    """Список записей клиентов из JSON (без синхронизации с wg0.conf)."""
+    """
+    Список клиентов из JSON без синхронизации с ``wg0.conf``.
+
+    Returns:
+        Список словарей-строк (не dict внутри ``clients`` отфильтровываются).
+    """
     with _lock:
         doc = _load_document(settings.VPN_CLIENTS_JSON_PATH)
         raw = doc.get("clients") or []
@@ -237,10 +330,12 @@ def list_clients() -> list[dict[str, Any]]:
 
 def sync_clients_json_with_runtime_state() -> list[dict[str, Any]]:
     """
-    При включённом WireGuard перечитать wg0.conf и обновить ``vpn_clients.json``.
+    Перечитать ``wg0.conf`` и при необходимости обновить ``vpn_clients.json``.
 
-    Если интеграция выключена или файла конфига нет — вернуть пустой список
-    (дашборд без секции клиентов).
+    Прецедент: главная страница при включённом WG, фоновый поток ``wg_background_sync``.
+
+    Returns:
+        Список клиентов после merge; пустой список, если WG выключен или ``wg0.conf`` нет.
     """
     with _lock:
         if not settings.wireguard_enabled():
@@ -257,7 +352,15 @@ def sync_clients_json_with_runtime_state() -> list[dict[str, Any]]:
 
 
 def get_client(client_id: str) -> dict[str, Any] | None:
-    """Найти клиента по UUID в текущем JSON."""
+    """
+    Найти клиента по UUID в текущем JSON.
+
+    Args:
+        client_id: поле ``id`` в записи.
+
+    Returns:
+        Словарь клиента или ``None``.
+    """
     for c in list_clients():
         if c.get("id") == client_id:
             return c
@@ -265,7 +368,12 @@ def get_client(client_id: str) -> dict[str, Any] | None:
 
 
 def _create_client_subnet_prefix(conf_path: Path) -> str:
-    """Префикс подсети для выбора свободного tunnel IP."""
+    """
+    Префикс ``A.B.C.`` для выбора свободного tunnel IP.
+
+    Raises:
+        RuntimeError: при неверном ``WIREGUARD_NETWORK_CIDR`` (обёртка над ``ValueError``).
+    """
     try:
         if (settings.WIREGUARD_NETWORK_CIDR or "").strip():
             return wireguard_conf.subnet_prefix_from_network_cidr(settings.WIREGUARD_NETWORK_CIDR)
@@ -283,7 +391,11 @@ def _rollback_created_peer_files(
     priv_file: Path,
     pub_file: Path,
 ) -> None:
-    """Откатить пир и ключи после ошибки записи клиентского .conf."""
+    """
+    Откатить пир и ключи после ошибки записи клиентского ``.conf``.
+
+    Прецедент: исключение в ``create_client`` после ``append_peer`` и записи ключей.
+    """
     wireguard_conf.remove_peer(conf_path, wg_name)
     for f in (priv_file, pub_file):
         try:
@@ -299,7 +411,12 @@ def _write_peer_keys_and_append_conf(
     tunnel_ip: str,
     conf_path: Path,
 ) -> tuple[Path, Path]:
-    """Записать ключи на диск и добавить [Peer] в wg0.conf."""
+    """
+    Записать файлы ключей и добавить ``[Peer]`` в ``wg0.conf``.
+
+    Returns:
+        ``(priv_file, pub_file)`` — пути к ключам на диске.
+    """
     keys_dir = _ensure_keys_dir()
     priv_file = keys_dir / f"{wg_name}_private.key"
     pub_file = keys_dir / f"{wg_name}_public.key"
@@ -316,10 +433,20 @@ def _write_peer_keys_and_append_conf(
 
 def create_client(name: str) -> dict[str, Any]:
     """
-    Создать клиента: ключи, блок [Peer] в wg0.conf, запись в JSON, клиентский .conf.
+    Создать клиента: ключи, ``[Peer]`` в ``wg0.conf``, запись в JSON, клиентский ``.conf``.
 
-    Требуются ``WIREGUARD_CONF_PATH``, файл конфига и настройки Endpoint
-    (см. ``wg_local_runtime.resolve_client_endpoint``).
+    Прецедент: POST ``/clients`` из дашборда.
+
+    Args:
+        name: отображаемое имя (не пустое после ``strip``).
+
+    Returns:
+        Новая строка клиента (с ``id``, ``wg_name``, ``tunnel_ip``, …).
+
+    Raises:
+        ValueError: пустое имя.
+        RuntimeError: WG выключен, нет ``wg0.conf``, нет Endpoint, нет публичного ключа сервера,
+            ошибка записи ``.conf`` (после отката пира/ключей пробрасывается дальше).
     """
     name = (name or "").strip()
     if not name:
@@ -390,18 +517,25 @@ def create_client(name: str) -> dict[str, Any]:
 
 
 def set_client_enabled(client_id: str, enabled: bool) -> None:
-    """Включить или отключить пир в wg0.conf и обновить поле ``enabled`` в JSON."""
+    """
+    Включить или отключить пира в ``wg0.conf`` и поле ``enabled`` в JSON.
+
+    Прецедент: POST ``/clients/<id>/toggle``.
+
+    Args:
+        client_id: UUID записи.
+        enabled: новое состояние (комментирование строк в блоке пира).
+
+    Raises:
+        KeyError: WG выключен, клиент не найден, нет ``wg_name``, пир не найден в конфиге.
+    """
     if not settings.wireguard_enabled():
         raise KeyError(client_id)
 
     with _lock:
         doc = _load_document(settings.VPN_CLIENTS_JSON_PATH)
         clients = [c for c in (doc.get("clients") or []) if isinstance(c, dict)]
-        target: dict[str, Any] | None = None
-        for c in clients:
-            if c.get("id") == client_id:
-                target = c
-                break
+        target = next((c for c in clients if c.get("id") == client_id), None)
         if target is None:
             raise KeyError(client_id)
         wgn = target.get("wg_name")
@@ -418,6 +552,7 @@ def set_client_enabled(client_id: str, enabled: bool) -> None:
 
 
 def _unlink_optional_paths(paths: tuple[Path, ...]) -> None:
+    """Удалить файлы по путям; ошибки ``OSError`` игнорируются."""
     for p in paths:
         try:
             p.unlink(missing_ok=True)
@@ -426,7 +561,12 @@ def _unlink_optional_paths(paths: tuple[Path, ...]) -> None:
 
 
 def _remove_wg_artifacts_for_client(wgn: str) -> None:
-    """Убрать пир из wg0.conf и связанные файлы ключей и клиентского конфига."""
+    """
+    Удалить пира из ``wg0.conf`` и связанные ключи, ``.conf`` и текст QR.
+
+    Args:
+        wgn: имя маркера клиента (``wg_name``).
+    """
     conf_path = wg_local_runtime.wg_conf_path_resolved()
     wireguard_conf.remove_peer(conf_path, wgn)
     keys_dir = _keys_base_path()
@@ -443,22 +583,27 @@ def _remove_wg_artifacts_for_client(wgn: str) -> None:
 
 
 def delete_client(client_id: str) -> None:
-    """Удалить клиента из JSON, убрать пир из wg0.conf и файлы ключей/конфига."""
+    """
+    Удалить клиента из JSON и с диска (пир, ключи, клиентский конфиг).
+
+    Прецедент: POST ``/clients/<id>/delete``.
+
+    Args:
+        client_id: UUID записи.
+
+    Raises:
+        KeyError: WG выключен или клиент не найден.
+    """
     if not settings.wireguard_enabled():
         raise KeyError(client_id)
 
     with _lock:
         doc = _load_document(settings.VPN_CLIENTS_JSON_PATH)
         clients = [c for c in (doc.get("clients") or []) if isinstance(c, dict)]
-        victim: dict[str, Any] | None = None
-        rest: list[dict[str, Any]] = []
-        for c in clients:
-            if c.get("id") == client_id:
-                victim = c
-            else:
-                rest.append(c)
+        victim = next((c for c in clients if c.get("id") == client_id), None)
         if victim is None:
             raise KeyError(client_id)
+        rest = [c for c in clients if c.get("id") != client_id]
         wgn = victim.get("wg_name")
         if isinstance(wgn, str) and wgn.strip():
             _remove_wg_artifacts_for_client(wgn.strip())
@@ -468,7 +613,20 @@ def delete_client(client_id: str) -> None:
 
 
 def client_config_text(client_id: str) -> str:
-    """Текст клиентского WireGuard-конфига с диска или заглушка с подсказкой."""
+    """
+    Текст клиентского WireGuard-конфига с диска или заглушка с подсказкой.
+
+    Прецедент: скачивание конфига, QR.
+
+    Args:
+        client_id: UUID клиента.
+
+    Raises:
+        KeyError: клиент не найден или WG выключен.
+
+    Returns:
+        Содержимое ``.conf`` или текст-заглушка, если файла нет.
+    """
     c = get_client(client_id)
     if not c:
         raise KeyError(client_id)
@@ -497,12 +655,31 @@ def client_config_text(client_id: str) -> str:
 
 
 def client_config_bytes(client_id: str) -> bytes:
-    """Содержимое .conf в байтах для отдачи в HTTP."""
+    """
+    Байты клиентского ``.conf`` (UTF-8).
+
+    Args:
+        client_id: UUID клиента.
+
+    Raises:
+        KeyError: см. ``client_config_text``.
+    """
     return client_config_text(client_id).encode("utf-8")
 
 
 def config_download_basename(client_id: str) -> str:
-    """Имя файла для заголовка Content-Disposition при скачивании конфига."""
+    """
+    Имя файла для ``Content-Disposition`` при скачивании ``.conf``.
+
+    Args:
+        client_id: UUID клиента.
+
+    Raises:
+        KeyError: клиент не найден.
+
+    Returns:
+        Строка вида ``\"slug_xxxxxxxx.conf\"``.
+    """
     c = get_client(client_id)
     if not c:
         raise KeyError(client_id)
@@ -512,7 +689,15 @@ def config_download_basename(client_id: str) -> str:
 
 
 def qr_png_bytes(client_id: str) -> bytes:
-    """PNG с QR-кодом, кодирующим текст клиентского конфига."""
+    """
+    PNG с QR-кодом, кодирующим текст клиентского конфига.
+
+    Args:
+        client_id: UUID клиента.
+
+    Raises:
+        KeyError: см. ``client_config_text``.
+    """
     c = get_client(client_id)
     if not c:
         raise KeyError(client_id)

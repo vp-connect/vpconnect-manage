@@ -1,7 +1,20 @@
 """
-Синхронизация ``vpn_clients.json`` с wg0.conf при старте и по таймеру (фоновый поток).
+Фоновая синхронизация **vpn_clients.json** с ``wg0.conf``.
 
-Подключается один раз после создания экземпляра Flask-приложения.
+Назначение
+    После старта приложения и далее с интервалом ``WIREGUARD_SYNC_INTERVAL_MINUTES``
+    вызывать ``vpn_clients_service.sync_clients_json_with_runtime_state`` в контексте Flask,
+    чтобы JSON соответствовал серверному конфигу WireGuard.
+
+Зависимости
+    ``flask.Flask``, ``settings``, ``vpn_clients_service``, ``threading``, ``time``.
+
+Кто вызывает
+    ``selfvpn_app`` один раз после создания приложения: ``register_wireguard_background_sync``.
+
+Условия
+    При пустом ``WIREGUARD_CONF_PATH`` регистрация не выполняет работу. При интервале
+    ``0`` фоновый поток не создаётся (только синхронизация при старте и из UI).
 """
 
 from __future__ import annotations
@@ -19,7 +32,15 @@ _log = logging.getLogger(__name__)
 
 
 def _background_loop(app: Flask) -> None:
-    """Периодически вызывать синхронизацию в контексте приложения."""
+    """
+    Бесконечный цикл: ``sleep`` на интервал, затем синхронизация в ``app_context``.
+
+    Args:
+        app: экземпляр Flask панели.
+
+    Побочные эффекты:
+        При ошибке синхронизации пишет исключение в лог и продолжает цикл.
+    """
     while True:
         interval = max(0, settings.WIREGUARD_SYNC_INTERVAL_MINUTES)
         if interval <= 0:
@@ -34,9 +55,16 @@ def _background_loop(app: Flask) -> None:
 
 def register_wireguard_background_sync(app: Flask) -> None:
     """
-    Выполнить начальную синхронизацию и при необходимости запустить daemon-thread.
+    Запустить начальную синхронизацию и при необходимости daemon-поток.
 
-    Не вызывать, если интеграция WireGuard отключена (пустой WIREGUARD_CONF_PATH).
+    Прецедент: сразу после создания ``selfvpn_app``.
+
+    Args:
+        app: экземпляр Flask.
+
+    Поведение:
+        Ничего не делает, если WireGuard выключен. Ошибка стартовой синхронизации
+        логируется. Поток создаётся только при положительном интервале минут.
     """
     if not settings.wireguard_enabled():
         return

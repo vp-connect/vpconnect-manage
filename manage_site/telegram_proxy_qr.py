@@ -1,7 +1,14 @@
 """
-Генерация PNG с QR-кодом для произвольной строки (ссылка MTProxy / tg://proxy).
+PNG **QR-код** по произвольной строке (ссылка MTProxy / ``tg://proxy``).
 
-Используется библиотека ``qrcode``; без дополнительной стилизации изображения.
+Назначение
+    Сериализация ссылки в растровое изображение для HTTP-ответа ``image/png``.
+
+Зависимости
+    Пакет ``qrcode`` (с PIL), стандартный ``io``.
+
+Кто вызывает
+    ``selfvpn_app.telegram_proxy_qr_png`` после ``mtproxy_link.read_mtproxy_link``.
 """
 
 from __future__ import annotations
@@ -13,16 +20,18 @@ import qrcode
 
 def build_mtproxy_qr_png(url: str) -> bytes:
     """
-    Построить PNG с QR-кодом, кодирующим переданную строку.
+    Построить PNG с QR-кодом для строки ``url``.
+
+    Прецедент: GET ``/telegram-proxy/qr.png`` при включённом MTProxy.
 
     Args:
-        url: непустая строка (обычно URL или tg://…).
-
-    Raises:
-        ValueError: если строка пустая после strip.
+        url: полезная нагрузка QR (непустая после ``strip``).
 
     Returns:
         Сырые байты PNG.
+
+    Raises:
+        ValueError: если после ``strip`` строка пустая.
     """
     text = (url or "").strip()
     if not text:

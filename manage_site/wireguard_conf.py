@@ -1,9 +1,18 @@
 """
-Разбор и безопасная запись серверного конфига WireGuard (wg0.conf).
+Разбор и безопасная запись серверного **WireGuard** конфига ``wg0.conf``.
 
-Формат блоков клиентов совместим со скриптами vpconnect-configure/wg:
-маркер «# Client: <имя>», затем секция [Peer]; вкл/выкл — комментирование строк
-(list_users.sh, create_client.sh, delete_client.sh, toggle_client.sh).
+Назначение
+    Представление файла как преамбула сервера + список блоков клиентов (маркер
+    ``# Client: <имя>`` и тело до следующего маркера). Операции добавления/удаления/включения
+    пиров совместимы со скриптами **vpconnect-configure** (list_users, create_client,
+    delete_client, toggle_client).
+
+Зависимости
+    Стандартная библиотека; опционально ``subprocess`` + ``bash`` для ``wg syncconf``
+    на стандартном пути ``/etc/wireguard/<iface>.conf``.
+
+Кто вызывает
+    ``vpn_clients_service``, ``wg_local_runtime`` (разбор преамбулы, ``try_run_wg_syncconf``).
 """
 
 from __future__ import annotations
@@ -26,28 +35,43 @@ ALLOWED_IPS_RE = re.compile(
 
 @dataclass
 class WgPeerBlock:
-    """Блок клиента без строки-маркера «# Client: …»."""
+    """
+    Один клиентский блок в ``wg0.conf`` (без строки ``# Client:``).
+
+    Attributes:
+        name: имя из маркера ``# Client: …``.
+        body_lines: строки тела (обычно ``[Peer]`` и поля).
+    """
 
     name: str
     body_lines: list[str] = field(default_factory=list)
 
     def clone(self) -> WgPeerBlock:
+        """Неглубокая копия для безопасного изменения списка строк."""
         return WgPeerBlock(name=self.name, body_lines=list(self.body_lines))
 
 
 def _line_is_active(line: str) -> bool:
-    """Не пустая строка и не закомментированная (для определения enabled у пира)."""
+    """True, если строка не пустая и не начинается с ``#`` (как у активного пира в bash-скриптах)."""
     s = line.strip()
     return bool(s) and not s.startswith("#")
 
 
 def peer_enabled(body_lines: list[str]) -> bool:
-    """Активен, если есть непустая строка, не начинающаяся с # (как list_users.sh)."""
+    """
+    Признак «пир включён» по набору строк тела блока.
+
+    Прецедент: синхронизация поля ``enabled`` в JSON с состоянием комментариев в ``wg0.conf``.
+    """
     return any(_line_is_active(line) for line in body_lines)
 
 
 def logical_config_line(line: str) -> str:
-    """Убрать ведущие пробелы и один уровень префиксных «#» для разбора полей конфига."""
+    """
+    Нормализовать строку конфига для разбора полей (учёт закомментированных директив).
+
+    Снимает ведущие пробелы и один ведущий ``#`` (как при раскомментировании в скриптах).
+    """
     s = line.lstrip()
     while s.startswith("#"):
         s = s[1:].lstrip()
@@ -55,7 +79,12 @@ def logical_config_line(line: str) -> str:
 
 
 def parse_peer_public_key(body_lines: list[str]) -> str | None:
-    """Извлечь ``PublicKey`` из тела блока [Peer] (с учётом закомментированных строк)."""
+    """
+    Извлечь первый ``PublicKey =`` из тела пира (после ``logical_config_line``).
+
+    Args:
+        body_lines: строки между ``# Client:`` и следующим маркером/пустым разделом.
+    """
     for line in body_lines:
         m = PUBLIC_KEY_RE.match(logical_config_line(line))
         if m:
@@ -64,7 +93,12 @@ def parse_peer_public_key(body_lines: list[str]) -> str | None:
 
 
 def parse_peer_tunnel_ip(body_lines: list[str]) -> str | None:
-    """Извлечь IPv4 из ``AllowedIPs`` (первое совпадение)."""
+    """
+    Извлечь IPv4 из первого ``AllowedIPs = a.b.c.d/…``.
+
+    Args:
+        body_lines: тело блока пира.
+    """
     for line in body_lines:
         logical = logical_config_line(line)
         m = ALLOWED_IPS_RE.match(logical)
@@ -74,14 +108,28 @@ def parse_peer_tunnel_ip(body_lines: list[str]) -> str | None:
 
 
 def iter_conf_lines(path: Path) -> Iterator[str]:
-    """Построчное чтение текстового конфига UTF-8."""
+    """
+    Итератор строк ``wg0.conf`` (UTF-8).
+
+    Args:
+        path: существующий файл конфига.
+    """
     text = path.read_text(encoding="utf-8")
     for line in text.splitlines():
         yield line
 
 
 def parse_wg_conf(path: Path) -> tuple[list[str], list[WgPeerBlock]]:
-    """Разобрать файл: преамбула до первого «# Client:» и список пиров."""
+    """
+    Разобрать ``wg0.conf`` на преамбулу сервера и список клиентских блоков.
+
+    Args:
+        path: путь к конфигу.
+
+    Returns:
+        ``(preamble_lines, peers)``. Если файла нет — ``([], [])``. Если маркеров клиентов
+        нет — ``(все_строки, [])``.
+    """
     if not path.is_file():
         return ([], [])
 
@@ -120,10 +168,18 @@ def parse_wg_conf(path: Path) -> tuple[list[str], list[WgPeerBlock]]:
 
 def server_subnet_prefix_from_conf(conf_path: Path) -> str:
     """
-    Определить /24 подсеть клиентов по первому `Address = ...` в конфиге сервера.
+    Префикс ``A.B.C.`` для выдачи клиентских IP из первого ``Address =`` в преамбуле.
 
-    В bash-скрипте используется логика:
-    `10.8.0.1/24` → префикс `10.8.0.` и адреса клиентов `10.8.0.2..254`.
+    Прецедент: ``vpn_clients_service`` при пустом ``WIREGUARD_NETWORK_CIDR``.
+
+    Args:
+        conf_path: ``wg0.conf`` сервера.
+
+    Returns:
+        Строка вида ``\"10.8.0.\"``.
+
+    Raises:
+        RuntimeError: если подходящей строки ``Address`` нет.
     """
     preamble, _ = parse_wg_conf(conf_path)
     for line in preamble:
@@ -142,9 +198,15 @@ def server_subnet_prefix_from_conf(conf_path: Path) -> str:
 
 def subnet_prefix_from_network_cidr(network_cidr: str) -> str:
     """
-    Префикс `A.B.C.` из CIDR вида `A.B.C.D/24` или `A.B.C.0/24`.
+    Префикс ``A.B.C.`` из CIDR сети панели (только **/24**).
 
-    Используется как источник истины, если сеть задана в настройках панели.
+    Прецедент: задан ``WIREGUARD_NETWORK_CIDR``; также валидация в ``write_client_conf_file``.
+
+    Args:
+        network_cidr: строка вида ``10.8.0.1/24``.
+
+    Raises:
+        ValueError: при неверном формате или маске не ``/24``.
     """
     s = (network_cidr or "").strip()
     m = CIDR_RE.match(s)
@@ -161,7 +223,16 @@ def subnet_prefix_from_network_cidr(network_cidr: str) -> str:
 
 
 def format_wg_conf(preamble: list[str], peers: list[WgPeerBlock]) -> str:
-    """Собрать текст wg0.conf из преамбулы и списка блоков клиентов."""
+    """
+    Собрать текст ``wg0.conf`` из преамбулы и блоков клиентов.
+
+    Args:
+        preamble: строки до первого ``# Client:``.
+        peers: список пиров с именами и телами.
+
+    Returns:
+        Полный текст файла (с переводами строк между блоками).
+    """
     parts: list[str] = []
     if preamble:
         parts.append("\n".join(preamble).rstrip("\n"))
@@ -177,7 +248,7 @@ def format_wg_conf(preamble: list[str], peers: list[WgPeerBlock]) -> str:
 
 
 def _normalize_blank_lines(text: str) -> str:
-    """Убрать лишние пустые строки (аналог awk из delete_client.sh, упрощённо)."""
+    """Схлопнуть множественные пустые строки до одной между непустыми блоками."""
     raw_lines = text.splitlines()
     out_lines: list[str] = []
     pending_blank = False
@@ -196,7 +267,11 @@ def _normalize_blank_lines(text: str) -> str:
 
 def set_peer_enabled(body_lines: list[str], enabled: bool) -> list[str]:
     """
-    Комментировать или раскомментировать строки блока (как toggle_client.sh).
+    Включить или выключить пир комментированием каждой строки тела (как ``toggle_client.sh``).
+
+    Args:
+        body_lines: строки блока ``[Peer]`` и ниже до следующего маркера.
+        enabled: ``True`` — убрать один ведущий ``#``; ``False`` — добавить ``#``.
     """
     if enabled:
         return [line[1:] if line.startswith("#") else line for line in body_lines]
@@ -209,7 +284,15 @@ def append_peer(
     public_key_b64: str,
     tunnel_ip: str,
 ) -> None:
-    """Добавить блок [Peer] в конец (после преамбулы и существующих пиров)."""
+    """
+    Добавить нового клиента в конец ``wg0.conf`` (маркер + минимальный ``[Peer]``).
+
+    Args:
+        conf_path: путь к конфигу.
+        wg_name: имя в строке ``# Client:``.
+        public_key_b64: публичный ключ клиента.
+        tunnel_ip: IPv4 для ``AllowedIPs = …/32``.
+    """
     preamble, peers = parse_wg_conf(conf_path)
     body = [
         "[Peer]",
@@ -223,7 +306,12 @@ def append_peer(
 
 
 def remove_peer(conf_path: Path, wg_name: str) -> bool:
-    """Удалить блок клиента по имени маркера. Возвращает True, если удалён."""
+    """
+    Удалить блок клиента по имени маркера.
+
+    Returns:
+        ``True``, если блок был найден и удалён.
+    """
     preamble, peers = parse_wg_conf(conf_path)
     new_peers = [p for p in peers if p.name != wg_name]
     if len(new_peers) == len(peers):
@@ -234,7 +322,12 @@ def remove_peer(conf_path: Path, wg_name: str) -> bool:
 
 
 def set_peer_block_enabled(conf_path: Path, wg_name: str, enabled: bool) -> bool:
-    """Включить/выключить пир (toggle_client.sh)."""
+    """
+    Включить или выключить существующего клиента в ``wg0.conf``.
+
+    Returns:
+        ``True``, если пир с именем ``wg_name`` найден.
+    """
     preamble, peers = parse_wg_conf(conf_path)
     found = False
     new_peers: list[WgPeerBlock] = []
@@ -253,7 +346,7 @@ def set_peer_block_enabled(conf_path: Path, wg_name: str, enabled: bool) -> bool
 
 
 def _atomic_write(path: Path, text: str) -> None:
-    """Записать файл через временный и ``replace``."""
+    """Атомарная запись текста в ``path`` (``.tmp`` + ``replace``)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(text, encoding="utf-8")
@@ -261,12 +354,23 @@ def _atomic_write(path: Path, text: str) -> None:
 
 
 def list_peers_from_conf(conf_path: Path) -> list[WgPeerBlock]:
+    """
+    Список пиров из ``wg0.conf`` (копии блоков, безопасно для мутаций).
+
+    Args:
+        conf_path: путь к конфигу.
+    """
     _, peers = parse_wg_conf(conf_path)
     return [p.clone() for p in peers]
 
 
 def collect_used_tunnel_ips(peers: list[WgPeerBlock]) -> set[str]:
-    """Множество IPv4 из ``AllowedIPs`` всех переданных пиров."""
+    """
+    Множество IPv4 туннелей, уже занятых в ``AllowedIPs`` переданных пиров.
+
+    Args:
+        peers: список блоков из ``list_peers_from_conf``.
+    """
     used: set[str] = set()
     for p in peers:
         ip = parse_peer_tunnel_ip(p.body_lines)
@@ -302,9 +406,18 @@ def try_run_wg_syncconf(
     log_warning: Callable[[str], None] | None = None,
 ) -> None:
     """
-    Вызвать ``wg syncconf`` через bash (как в скриптах установки).
+    Применить изменения ``wg0.conf`` через ``wg syncconf`` (только «стандартный» путь в ``/etc``).
 
-    Срабатывает только если ``conf_path`` совпадает с ``/etc/wireguard/<iface>.conf``.
+    Прецедент: ``wg_local_runtime.apply_wg_syncconf_if_configured`` после правок панелью.
+
+    Args:
+        interface: имя интерфейса (например ``wg0``).
+        conf_path: фактический путь к конфигу на машине.
+        log_warning: опциональный колбэк для предупреждений (пропуск sync, ошибки bash/wg).
+
+    Поведение:
+        Если ``conf_path.resolve()`` не совпадает с ``/etc/wireguard/<interface>.conf``,
+        sync не выполняется — только предупреждение.
     """
     try:
         expected = (Path("/etc/wireguard") / f"{interface}.conf").resolve()

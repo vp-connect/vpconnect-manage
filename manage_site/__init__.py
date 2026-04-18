@@ -1,5 +1,16 @@
 """
-Пакет веб-приложения vpconnect-manage (Flask): панель администратора, WireGuard, MTProxy.
+Пакет ``manage_site`` — веб-панель **vpconnect-manage** (Flask).
 
-Точка входа WSGI: ``manage_site.selfvpn_app:selfvpn_app``.
+Назначение
+    Единое место кода приложения: маршруты, настройки, работа с JSON-данными,
+    интеграция WireGuard и MTProxy.
+
+Направление зависимостей
+    WSGI/CLI импортируют фабрику/приложение из ``selfvpn_app``; остальные модули
+    не тянут ``selfvpn_app`` на уровне импорта (избегаем циклов). Хранилища и
+    сервисы зависят от ``settings`` и друг от друга по смыслу (см. docstring в
+    каждом файле).
+
+Точка входа WSGI
+    ``manage_site.selfvpn_app:selfvpn_app`` — экземпляр ``Flask``.
 """

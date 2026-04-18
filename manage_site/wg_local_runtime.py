@@ -1,8 +1,17 @@
 """
-Локальные операции WireGuard на машине с панелью: ключи, Endpoint, запись .conf, wg syncconf.
+Локальные операции **WireGuard** на машине с панелью: ключи, Endpoint, клиентский ``.conf``, ``wg syncconf``.
 
-Используется при создании клиентов и после правок wg0.conf.
-Требует утилит ``wg`` и (для автоматического ``wg syncconf``) ``bash`` на Linux.
+Назначение
+    Обёртки над утилитой ``wg`` и чтением ``wg0.conf`` для создания клиентов и
+    обновления конфигов без ручного вмешательства.
+
+Зависимости
+    ``settings`` (пути, интерфейс, DNS, CIDR), ``wireguard_conf`` (разбор преамбулы,
+    ``try_run_wg_syncconf``). Внешние команды: ``wg``, при стандартном пути конфига — ``bash``.
+
+Кто вызывает
+    ``vpn_clients_service`` (ключи, endpoint, публичный ключ сервера, запись ``.conf``,
+    ``apply_wg_syncconf_if_configured``).
 """
 
 from __future__ import annotations
@@ -23,12 +32,25 @@ _LISTEN_PORT_RE = re.compile(r"^\s*ListenPort\s*=\s*(\d+)\s*$")
 
 
 def wg_conf_path_resolved() -> Path:
-    """Абсолютный путь к wg0.conf из настроек."""
+    """
+    Абсолютный путь к серверному ``wg0.conf`` из ``WIREGUARD_CONF_PATH``.
+
+    Returns:
+        ``Path.expanduser().resolve()``.
+    """
     return Path(settings.WIREGUARD_CONF_PATH).expanduser().resolve()
 
 
 def listen_port_from_server_preamble(conf_path: Path) -> int | None:
-    """Прочитать ``ListenPort`` из преамбулы wg0.conf (секция [Interface])."""
+    """
+    Найти ``ListenPort`` в преамбуле ``wg0.conf`` (до первого ``# Client:``).
+
+    Args:
+        conf_path: путь к конфигу сервера.
+
+    Returns:
+        Порт или ``None``, если строка не найдена.
+    """
     preamble, _ = wireguard_conf.parse_wg_conf(conf_path)
     for line in preamble:
         m = _LISTEN_PORT_RE.match(wireguard_conf.logical_config_line(line))
@@ -39,10 +61,18 @@ def listen_port_from_server_preamble(conf_path: Path) -> int | None:
 
 def resolve_client_endpoint(conf_path: Path) -> str:
     """
-    Собрать строку ``Endpoint`` для клиентского конфига (куда клиент подключается снаружи).
+    Собрать строку ``Endpoint`` для клиентского конфига (куда клиент стучится снаружи).
 
-    Приоритет: ``WIREGUARD_ENDPOINT``; иначе ``WIREGUARD_PUBLIC_HOST`` + порт из
-    ``WIREGUARD_LISTEN_PORT``, из ``ListenPort`` в конфиге или 51820.
+    Прецедент: ``vpn_clients_service.create_client`` перед записью ``.conf``.
+
+    Args:
+        conf_path: ``wg0.conf`` (для чтения ``ListenPort``, если порт не задан в settings).
+
+    Returns:
+        ``host:port`` или полная строка из ``WIREGUARD_ENDPOINT``.
+
+    Raises:
+        RuntimeError: если нет ни ``WIREGUARD_ENDPOINT``, ни ``WIREGUARD_PUBLIC_HOST``.
     """
     direct = (settings.WIREGUARD_ENDPOINT or "").strip()
     if direct:
@@ -64,7 +94,12 @@ def resolve_client_endpoint(conf_path: Path) -> str:
 
 
 def _wg_show_interface_public_key() -> str | None:
-    """Публичный ключ интерфейса через ``wg show`` (если интерфейс поднят)."""
+    """
+    Публичный ключ интерфейса через ``wg show <iface> public-key``.
+
+    Returns:
+        Непустая строка ключа или ``None`` (интерфейс не поднят, ``wg`` недоступен, таймаут).
+    """
     try:
         out = subprocess.run(
             ["wg", "show", settings.WIREGUARD_INTERFACE_NAME, "public-key"],
@@ -79,7 +114,12 @@ def _wg_show_interface_public_key() -> str | None:
 
 
 def _interface_private_key_from_conf(conf_path: Path) -> str | None:
-    """Строка ``PrivateKey`` из преамбулы wg0.conf (ключ или путь)."""
+    """
+    Значение ``PrivateKey =`` из преамбулы ``wg0.conf`` (строка ключа или путь к файлу).
+
+    Args:
+        conf_path: путь к ``wg0.conf``.
+    """
     preamble, _ = wireguard_conf.parse_wg_conf(conf_path)
     for line in preamble:
         m = _PRIVATE_KEY_RE.match(wireguard_conf.logical_config_line(line))
@@ -89,7 +129,15 @@ def _interface_private_key_from_conf(conf_path: Path) -> str | None:
 
 
 def _expand_private_key_value(priv: str) -> str | None:
-    """Если в конфиге путь к файлу — прочитать содержимое; иначе вернуть ``priv``."""
+    """
+    Если ``priv`` похож на путь — прочитать файл; иначе вернуть строку ключа.
+
+    Args:
+        priv: значение из ``PrivateKey =`` (inline или путь с ``/`` / ``~``).
+
+    Returns:
+        Содержимое приватного ключа или ``None`` при отсутствии файла / ошибке чтения.
+    """
     if "/" not in priv and not priv.startswith("~"):
         return priv
     p = Path(priv).expanduser()
@@ -102,7 +150,15 @@ def _expand_private_key_value(priv: str) -> str | None:
 
 
 def _public_key_from_private(priv: str) -> str | None:
-    """Публичный ключ из приватного (через ``wg pubkey``)."""
+    """
+    Вычислить публичный ключ из приватного через ``wg pubkey``.
+
+    Args:
+        priv: приватный ключ в формате WireGuard.
+
+    Returns:
+        Публичный ключ или ``None`` при ошибке процесса.
+    """
     try:
         pub = subprocess.run(
             ["wg", "pubkey"],
@@ -119,11 +175,15 @@ def _public_key_from_private(priv: str) -> str | None:
 
 def server_public_key_from_interface(conf_path: Path) -> str | None:
     """
-    Определить публичный ключ сервера WireGuard.
+    Публичный ключ сервера для секции ``[Peer]`` в клиентском конфиге.
 
-    Приоритет:
-    1) `wg show <iface> public-key` (если интерфейс поднят и доступна утилита wg)
-    2) `PrivateKey = ...` в wg0.conf: либо сам ключ (base64), либо путь к файлу с ключом
+    Порядок: (1) ``wg show``; (2) ``PrivateKey`` из ``wg0.conf`` (inline или файл) → ``wg pubkey``.
+
+    Args:
+        conf_path: путь к ``wg0.conf``.
+
+    Returns:
+        Base64 публичного ключа или ``None``, если источников нет.
     """
     from_show = _wg_show_interface_public_key()
     if from_show:
@@ -140,7 +200,17 @@ def server_public_key_from_interface(conf_path: Path) -> str | None:
 
 
 def wg_gen_keypair() -> tuple[str, str]:
-    """Сгенерировать пару ключей WireGuard (приватный и публичный, base64)."""
+    """
+    Сгенерировать пару ключей ``wg genkey`` / ``wg pubkey``.
+
+    Прецедент: создание нового клиента.
+
+    Returns:
+        ``(private_b64, public_b64)``.
+
+    Raises:
+        RuntimeError: если ``wg`` не найдена или команда завершилась с ошибкой.
+    """
     try:
         gen = subprocess.run(
             ["wg", "genkey"],
@@ -175,9 +245,25 @@ def write_client_conf_file(
     endpoint: str,
 ) -> Path:
     """
-    Записать клиентский ``.conf`` в ``client_config_dir`` (права 0600 при возможности).
+    Записать клиентский ``{wg_name}.conf`` и подкаталог ``qr``.
 
-    Формат совместим с типичным выводом create_client.sh (Address /24, DNS, Peer, Keepalive).
+    Прецедент: успешное создание клиента после получения публичного ключа сервера.
+
+    Args:
+        client_config_dir: корень каталога клиентских конфигов.
+        wg_name: имя маркера клиента (база имени файла).
+        private_key: приватный ключ клиента.
+        tunnel_ip: IPv4 туннеля (без маски в аргументе; в файл пишется ``/24``).
+        server_public_key: публичный ключ сервера.
+        endpoint: строка ``Endpoint`` (``host:port``).
+
+    Returns:
+        Путь к записанному ``.conf``.
+
+    Побочные эффекты:
+        Если задан ``WIREGUARD_NETWORK_CIDR``, выполняется валидация через
+        ``subnet_prefix_from_network_cidr`` (как при настройке из панели). Права ``0600`` на файл
+        при возможности.
     """
     client_config_dir.mkdir(parents=True, exist_ok=True)
     (client_config_dir / "qr").mkdir(parents=True, exist_ok=True)
@@ -185,11 +271,8 @@ def write_client_conf_file(
     dns = (settings.WIREGUARD_DNS or "8.8.8.8").strip()
     address_cidr = (settings.WIREGUARD_NETWORK_CIDR or "").strip()
     if address_cidr:
-        # В установочных скриптах и нашей выдаче IP сейчас используется /24.
         _ = wireguard_conf.subnet_prefix_from_network_cidr(address_cidr)
-        client_address = f"{tunnel_ip}/24"
-    else:
-        client_address = f"{tunnel_ip}/24"
+    client_address = f"{tunnel_ip}/24"
     text = (
         "[Interface]\n"
         f"PrivateKey = {private_key}\n"
@@ -211,14 +294,18 @@ def write_client_conf_file(
 
 
 def _syncconf_log_warning(msg: str) -> None:
+    """Передать предупреждение в лог панели (колбэк для ``try_run_wg_syncconf``)."""
     _log.warning("%s", msg)
 
 
 def apply_wg_syncconf_if_configured() -> None:
     """
-    После правки wg0.conf вызвать ``wg syncconf``, если путь совпадает с ожиданием wg-quick.
+    После правки ``wg0.conf`` вызвать ``wg syncconf``, если путь совпадает с ожиданием wg-quick.
 
-    Иначе — предупреждение в лог (см. ``wireguard_conf.try_run_wg_syncconf``).
+    Прецедент: после изменений пиров из ``vpn_clients_service``.
+
+    Поведение:
+        Ничего не делает при выключенном WireGuard. Иначе делегирует в ``wireguard_conf.try_run_wg_syncconf``.
     """
     if not settings.wireguard_enabled():
         return

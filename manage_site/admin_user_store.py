@@ -1,9 +1,16 @@
 """
-Запись учётных данных администратора в ``admin_user.json`` (MD5 пароля).
+Учётная запись администратора в ``admin_user.json`` (пароль как **MD5 hex**).
 
-Потокобезопасная запись через ``threading.Lock``.
-Функция ``ensure_admin_user_from_default_password`` создаёт файл при первом запуске,
-если задан ``ADMIN_DEFAULT_PASSWORD``.
+Назначение
+    Создание файла при первом запуске из ``ADMIN_DEFAULT_PASSWORD`` и смена пароля
+    из UI с атомарной записью JSON.
+
+Зависимости
+    ``settings`` — путь ``ADMIN_USER_JSON_PATH``. Стандартная библиотека: ``hashlib``,
+    ``json``, ``threading``.
+
+Кто вызывает
+    ``selfvpn_app`` (старт и POST смены пароля), тесты.
 """
 
 from __future__ import annotations
@@ -21,10 +28,13 @@ _lock = threading.Lock()
 
 def ensure_admin_user_from_default_password() -> bool:
     """
-    При отсутствии ``admin_user.json`` и непустом ``ADMIN_DEFAULT_PASSWORD`` создать файл с MD5.
+    Создать ``admin_user.json`` с MD5 пароля по умолчанию, если файла ещё нет.
+
+    Прецедент: один раз при импорте ``selfvpn_app`` до чтения кэша пароля.
 
     Returns:
-        True, если файл был создан.
+        ``True``, если файл был создан; иначе ``False`` (файл уже есть или пароль
+        по умолчанию пуст).
     """
     path: Path = settings.ADMIN_USER_JSON_PATH
     if path.is_file():
@@ -38,7 +48,12 @@ def ensure_admin_user_from_default_password() -> bool:
 
 
 def _is_hex_md5(s: str) -> bool:
-    """Проверка: строка — 32 символа hex в нижнем регистре."""
+    """
+    Проверить, что строка — 32 символа **lowercase** hex.
+
+    Args:
+        s: нормализованная строка (ожидается уже ``.lower()`` снаружи при необходимости).
+    """
     if len(s) != 32:
         return False
     return all(c in "0123456789abcdef" for c in s)
@@ -46,10 +61,18 @@ def _is_hex_md5(s: str) -> bool:
 
 def save_password_md5_hex(password_md5_hex: str) -> None:
     """
-    Сохранить MD5 пароля администратора (32 символа hex, регистр нормализуется).
+    Атомарно сохранить MD5 пароля администратора в ``admin_user.json``.
+
+    Прецедент: смена пароля в UI, сброс на значение по умолчанию, первичное создание.
+
+    Args:
+        password_md5_hex: 32 символа hex (регистр входа не важен — нормализуется).
 
     Raises:
-        ValueError: если формат не MD5 hex.
+        ValueError: если после ``strip``/``lower`` строка не является валидным MD5 hex.
+
+    Побочные эффекты:
+        Читает существующий JSON (если есть), мержит поле ``password_md5``, пишет через ``.tmp``.
     """
     h = (password_md5_hex or "").strip().lower()
     if not _is_hex_md5(h):
