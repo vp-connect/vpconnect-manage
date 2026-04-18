@@ -63,15 +63,8 @@ def resolve_client_endpoint(conf_path: Path) -> str:
     return f"{host}:{port}"
 
 
-def server_public_key_from_interface(conf_path: Path) -> str | None:
-    """
-    Определить публичный ключ сервера WireGuard.
-
-    Приоритет:
-    1) `wg show <iface> public-key` (если интерфейс поднят и доступна утилита wg)
-    2) `PrivateKey = ...` в wg0.conf: либо сам ключ (base64), либо путь к файлу с ключом
-    """
-    # 1) Если интерфейс поднят — это самый надёжный способ.
+def _wg_show_interface_public_key() -> str | None:
+    """Публичный ключ интерфейса через ``wg show`` (если интерфейс поднят)."""
     try:
         out = subprocess.run(
             ["wg", "show", settings.WIREGUARD_INTERFACE_NAME, "public-key"],
@@ -80,31 +73,36 @@ def server_public_key_from_interface(conf_path: Path) -> str | None:
             text=True,
             timeout=5,
         ).stdout.strip()
-        if out:
-            return out
+        return out or None
     except Exception:
-        pass
+        return None
 
-    # 2) Иначе — попытаться получить ключ из конфига (полезно при первом запуске/в dev).
+
+def _interface_private_key_from_conf(conf_path: Path) -> str | None:
+    """Строка ``PrivateKey`` из преамбулы wg0.conf (ключ или путь)."""
     preamble, _ = wireguard_conf.parse_wg_conf(conf_path)
-    priv: str | None = None
     for line in preamble:
         m = _PRIVATE_KEY_RE.match(wireguard_conf.logical_config_line(line))
         if m:
-            priv = m.group(1).strip()
-            break
-    if not priv:
+            return m.group(1).strip()
+    return None
+
+
+def _expand_private_key_value(priv: str) -> str | None:
+    """Если в конфиге путь к файлу — прочитать содержимое; иначе вернуть ``priv``."""
+    if "/" not in priv and not priv.startswith("~"):
+        return priv
+    p = Path(priv).expanduser()
+    try:
+        if not p.is_file():
+            return None
+        return p.read_text(encoding="utf-8").strip()
+    except OSError:
         return None
 
-    # Если в конфиге указан путь, а не ключ — прочитать файл.
-    if "/" in priv or priv.startswith("~"):
-        p = Path(priv).expanduser()
-        try:
-            if p.is_file():
-                priv = p.read_text(encoding="utf-8").strip()
-        except OSError:
-            return None
 
+def _public_key_from_private(priv: str) -> str | None:
+    """Публичный ключ из приватного (через ``wg pubkey``)."""
     try:
         pub = subprocess.run(
             ["wg", "pubkey"],
@@ -117,6 +115,28 @@ def server_public_key_from_interface(conf_path: Path) -> str | None:
         return pub.stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError, OSError):
         return None
+
+
+def server_public_key_from_interface(conf_path: Path) -> str | None:
+    """
+    Определить публичный ключ сервера WireGuard.
+
+    Приоритет:
+    1) `wg show <iface> public-key` (если интерфейс поднят и доступна утилита wg)
+    2) `PrivateKey = ...` в wg0.conf: либо сам ключ (base64), либо путь к файлу с ключом
+    """
+    from_show = _wg_show_interface_public_key()
+    if from_show:
+        return from_show
+
+    priv_raw = _interface_private_key_from_conf(conf_path)
+    if not priv_raw:
+        return None
+
+    priv = _expand_private_key_value(priv_raw)
+    if not priv:
+        return None
+    return _public_key_from_private(priv)
 
 
 def wg_gen_keypair() -> tuple[str, str]:

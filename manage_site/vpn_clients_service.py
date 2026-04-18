@@ -127,25 +127,35 @@ def _unique_wg_name(display_name: str, taken: set[str]) -> str:
     return candidate
 
 
-def _merge_wg_into_document(doc: dict[str, Any], conf_path: Path) -> bool:
-    """
-    Слить состояние пиров из wg0.conf в ``doc['clients']``.
-
-    Записи без ``wg_name`` отбрасываются; пиры только в конфиге добавляются в JSON.
-    Возвращает True, если документ изменился и его нужно сохранить.
-    """
-    peers = wireguard_conf.list_peers_from_conf(conf_path)
-    by_wg: dict[str, wireguard_conf.WgPeerBlock] = {p.name: p for p in peers}
-
-    raw = doc.get("clients")
-    if not isinstance(raw, list):
-        raw = []
-    clients = [c for c in raw if isinstance(c, dict)]
-
+def _merge_row_with_peer(
+    row: dict[str, Any],
+    peer: wireguard_conf.WgPeerBlock,
+) -> bool:
+    """Обновить поля строки из блока пира; вернуть True, если что-то изменилось."""
     changed = False
+    ip = wireguard_conf.parse_peer_tunnel_ip(peer.body_lines)
+    pub = wireguard_conf.parse_peer_public_key(peer.body_lines)
+    en = wireguard_conf.peer_enabled(peer.body_lines)
+    if ip and row.get("tunnel_ip") != ip:
+        row["tunnel_ip"] = ip
+        changed = True
+    if pub and row.get("public_key") != pub:
+        row["public_key"] = pub
+        changed = True
+    if bool(row.get("enabled")) != en:
+        row["enabled"] = en
+        changed = True
+    return changed
+
+
+def _collect_kept_clients_from_json(
+    clients: list[dict[str, Any]],
+    by_wg: dict[str, wireguard_conf.WgPeerBlock],
+) -> tuple[list[dict[str, Any]], set[str], bool]:
+    """Строки JSON, согласованные с конфигом; seen_wg — какие пиры уже учтены."""
     kept: list[dict[str, Any]] = []
     seen_wg: set[str] = set()
-
+    changed = False
     for row in clients:
         wgn = row.get("wg_name")
         if not isinstance(wgn, str) or not wgn.strip():
@@ -156,20 +166,19 @@ def _merge_wg_into_document(doc: dict[str, Any], conf_path: Path) -> bool:
             continue
         peer = by_wg[wgn]
         seen_wg.add(wgn)
-        ip = wireguard_conf.parse_peer_tunnel_ip(peer.body_lines)
-        pub = wireguard_conf.parse_peer_public_key(peer.body_lines)
-        en = wireguard_conf.peer_enabled(peer.body_lines)
-        if ip and row.get("tunnel_ip") != ip:
-            row["tunnel_ip"] = ip
-            changed = True
-        if pub and row.get("public_key") != pub:
-            row["public_key"] = pub
-            changed = True
-        if bool(row.get("enabled")) != en:
-            row["enabled"] = en
+        if _merge_row_with_peer(row, peer):
             changed = True
         kept.append(row)
+    return kept, seen_wg, changed
 
+
+def _append_json_rows_for_conf_only_peers(
+    by_wg: dict[str, wireguard_conf.WgPeerBlock],
+    seen_wg: set[str],
+    kept: list[dict[str, Any]],
+) -> bool:
+    """Добавить в ``kept`` записи для пиров, есть в конфиге, но не в JSON."""
+    changed = False
     for wgn, peer in by_wg.items():
         if wgn in seen_wg:
             continue
@@ -189,6 +198,27 @@ def _merge_wg_into_document(doc: dict[str, Any], conf_path: Path) -> bool:
         if pub:
             new_row["public_key"] = pub
         kept.append(new_row)
+        changed = True
+    return changed
+
+
+def _merge_wg_into_document(doc: dict[str, Any], conf_path: Path) -> bool:
+    """
+    Слить состояние пиров из wg0.conf в ``doc['clients']``.
+
+    Записи без ``wg_name`` отбрасываются; пиры только в конфиге добавляются в JSON.
+    Возвращает True, если документ изменился и его нужно сохранить.
+    """
+    peers = wireguard_conf.list_peers_from_conf(conf_path)
+    by_wg: dict[str, wireguard_conf.WgPeerBlock] = {p.name: p for p in peers}
+
+    raw = doc.get("clients")
+    if not isinstance(raw, list):
+        raw = []
+    clients = [c for c in raw if isinstance(c, dict)]
+
+    kept, seen_wg, changed = _collect_kept_clients_from_json(clients, by_wg)
+    if _append_json_rows_for_conf_only_peers(by_wg, seen_wg, kept):
         changed = True
 
     if changed or len(kept) != len(clients):
@@ -234,6 +264,56 @@ def get_client(client_id: str) -> dict[str, Any] | None:
     return None
 
 
+def _create_client_subnet_prefix(conf_path: Path) -> str:
+    """Префикс подсети для выбора свободного tunnel IP."""
+    try:
+        if (settings.WIREGUARD_NETWORK_CIDR or "").strip():
+            return wireguard_conf.subnet_prefix_from_network_cidr(settings.WIREGUARD_NETWORK_CIDR)
+        return wireguard_conf.server_subnet_prefix_from_conf(conf_path)
+    except ValueError as e:
+        raise RuntimeError(
+            "Некорректная настройка WIREGUARD_NETWORK_CIDR. "
+            "Ожидается IPv4 CIDR формата A.B.C.D/24 (например 10.8.0.1/24)."
+        ) from e
+
+
+def _rollback_created_peer_files(
+    conf_path: Path,
+    wg_name: str,
+    priv_file: Path,
+    pub_file: Path,
+) -> None:
+    """Откатить пир и ключи после ошибки записи клиентского .conf."""
+    wireguard_conf.remove_peer(conf_path, wg_name)
+    for f in (priv_file, pub_file):
+        try:
+            f.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _write_peer_keys_and_append_conf(
+    wg_name: str,
+    pub: str,
+    priv: str,
+    tunnel_ip: str,
+    conf_path: Path,
+) -> tuple[Path, Path]:
+    """Записать ключи на диск и добавить [Peer] в wg0.conf."""
+    keys_dir = _ensure_keys_dir()
+    priv_file = keys_dir / f"{wg_name}_private.key"
+    pub_file = keys_dir / f"{wg_name}_public.key"
+    priv_file.write_text(priv + "\n", encoding="utf-8")
+    pub_file.write_text(pub + "\n", encoding="utf-8")
+    try:
+        os.chmod(priv_file, 0o600)
+        os.chmod(pub_file, 0o644)
+    except OSError:
+        pass
+    wireguard_conf.append_peer(conf_path, wg_name, pub, tunnel_ip)
+    return priv_file, pub_file
+
+
 def create_client(name: str) -> dict[str, Any]:
     """
     Создать клиента: ключи, блок [Peer] в wg0.conf, запись в JSON, клиентский .conf.
@@ -252,18 +332,7 @@ def create_client(name: str) -> dict[str, Any]:
         raise RuntimeError(f"Нет файла конфигурации WireGuard: {conf_path}")
 
     endpoint = wg_local_runtime.resolve_client_endpoint(conf_path)
-    try:
-        if (settings.WIREGUARD_NETWORK_CIDR or "").strip():
-            subnet_prefix = wireguard_conf.subnet_prefix_from_network_cidr(
-                settings.WIREGUARD_NETWORK_CIDR
-            )
-        else:
-            subnet_prefix = wireguard_conf.server_subnet_prefix_from_conf(conf_path)
-    except ValueError as e:
-        raise RuntimeError(
-            "Некорректная настройка WIREGUARD_NETWORK_CIDR. "
-            "Ожидается IPv4 CIDR формата A.B.C.D/24 (например 10.8.0.1/24)."
-        ) from e
+    subnet_prefix = _create_client_subnet_prefix(conf_path)
 
     with _lock:
         peers = wireguard_conf.list_peers_from_conf(conf_path)
@@ -279,18 +348,9 @@ def create_client(name: str) -> dict[str, Any]:
         tunnel_ip = wireguard_conf.pick_free_tunnel_ip(peers, subnet_prefix=subnet_prefix)
 
         priv, pub = wg_local_runtime.wg_gen_keypair()
-        keys_dir = _ensure_keys_dir()
-        priv_file = keys_dir / f"{wg_name}_private.key"
-        pub_file = keys_dir / f"{wg_name}_public.key"
-        priv_file.write_text(priv + "\n", encoding="utf-8")
-        pub_file.write_text(pub + "\n", encoding="utf-8")
-        try:
-            os.chmod(priv_file, 0o600)
-            os.chmod(pub_file, 0o644)
-        except OSError:
-            pass
-
-        wireguard_conf.append_peer(conf_path, wg_name, pub, tunnel_ip)
+        priv_file, pub_file = _write_peer_keys_and_append_conf(
+            wg_name, pub, priv, tunnel_ip, conf_path
+        )
 
         try:
             srv_pub = wg_local_runtime.server_public_key_from_interface(conf_path)
@@ -308,12 +368,7 @@ def create_client(name: str) -> dict[str, Any]:
                 endpoint,
             )
         except Exception:
-            wireguard_conf.remove_peer(conf_path, wg_name)
-            for f in (priv_file, pub_file):
-                try:
-                    f.unlink(missing_ok=True)
-                except OSError:
-                    pass
+            _rollback_created_peer_files(conf_path, wg_name, priv_file, pub_file)
             raise
 
         wg_local_runtime.apply_wg_syncconf_if_configured()
@@ -362,6 +417,31 @@ def set_client_enabled(client_id: str, enabled: bool) -> None:
         wg_local_runtime.apply_wg_syncconf_if_configured()
 
 
+def _unlink_optional_paths(paths: tuple[Path, ...]) -> None:
+    for p in paths:
+        try:
+            p.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _remove_wg_artifacts_for_client(wgn: str) -> None:
+    """Убрать пир из wg0.conf и связанные файлы ключей и клиентского конфига."""
+    conf_path = wg_local_runtime.wg_conf_path_resolved()
+    wireguard_conf.remove_peer(conf_path, wgn)
+    keys_dir = _keys_base_path()
+    cfg_dir = _client_config_dir()
+    _unlink_optional_paths(
+        (
+            keys_dir / f"{wgn}_private.key",
+            keys_dir / f"{wgn}_public.key",
+            cfg_dir / f"{wgn}.conf",
+            cfg_dir / "qr" / f"{wgn}.txt",
+        )
+    )
+    wg_local_runtime.apply_wg_syncconf_if_configured()
+
+
 def delete_client(client_id: str) -> None:
     """Удалить клиента из JSON, убрать пир из wg0.conf и файлы ключей/конфига."""
     if not settings.wireguard_enabled():
@@ -381,28 +461,7 @@ def delete_client(client_id: str) -> None:
             raise KeyError(client_id)
         wgn = victim.get("wg_name")
         if isinstance(wgn, str) and wgn.strip():
-            conf_path = wg_local_runtime.wg_conf_path_resolved()
-            wireguard_conf.remove_peer(conf_path, wgn.strip())
-            keys_dir = _keys_base_path()
-            w = wgn.strip()
-            for p in (
-                keys_dir / f"{w}_private.key",
-                keys_dir / f"{w}_public.key",
-            ):
-                try:
-                    p.unlink(missing_ok=True)
-                except OSError:
-                    pass
-            cfg_dir = _client_config_dir()
-            for p in (
-                cfg_dir / f"{w}.conf",
-                cfg_dir / "qr" / f"{w}.txt",
-            ):
-                try:
-                    p.unlink(missing_ok=True)
-                except OSError:
-                    pass
-            wg_local_runtime.apply_wg_syncconf_if_configured()
+            _remove_wg_artifacts_for_client(wgn.strip())
 
         doc["clients"] = rest
         _save_document(settings.VPN_CLIENTS_JSON_PATH, doc)
