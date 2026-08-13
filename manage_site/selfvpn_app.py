@@ -135,11 +135,17 @@ def require_login():
 
     Исключения: ``login``, ``logout``, ``static``.
     """
-    if request.endpoint in ("login", "logout", "static"):
+    if request.endpoint in ("login", "logout", "static", "favicon"):
         return
     if session.get("admin_authenticated"):
         return
     return redirect(url_for("login"))
+
+
+@selfvpn_app.get("/favicon.ico")
+def favicon():
+    """Совместимость с браузерами: отдать favicon по стандартному URL."""
+    return redirect(url_for("static", filename="img/favicon.ico"), code=301)
 
 
 def _require_client_uuid(client_id: str) -> str:
