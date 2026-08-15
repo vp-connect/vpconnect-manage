@@ -263,6 +263,23 @@ def wg_gen_keypair() -> tuple[str, str]:
         raise RuntimeError(f"Ошибка генерации ключей {service_name}: {err}") from e
 
 
+def _server_obfuscation_lines(conf_path: Path) -> list[str]:
+    """Извлечь Jc/Jmin/Jmax/S1-S4/H1-H4 из преамбулы серверного конфига (AmneziaWG)."""
+    keys = ("Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4")
+    out: list[str] = []
+    preamble, _ = wireguard_conf.parse_wg_conf(conf_path)
+    for line in preamble:
+        logical = wireguard_conf.logical_config_line(line)
+        for key in keys:
+            if logical.startswith(f"{key} =") or logical.startswith(f"{key}="):
+                # сохраняем нормализованный вид Key = value
+                parts = logical.split("=", 1)
+                if len(parts) == 2:
+                    out.append(f"{key} = {parts[1].strip()}")
+                break
+    return out
+
+
 def write_client_conf_file(
     client_config_dir: Path,
     wg_name: str,
@@ -276,21 +293,8 @@ def write_client_conf_file(
 
     Прецедент: успешное создание клиента после получения публичного ключа сервера.
 
-    Args:
-        client_config_dir: корень каталога клиентских конфигов.
-        wg_name: имя маркера клиента (база имени файла).
-        private_key: приватный ключ клиента.
-        tunnel_ip: IPv4 туннеля (без маски в аргументе; в файл пишется ``/24``).
-        server_public_key: публичный ключ сервера.
-        endpoint: строка ``Endpoint`` (``host:port``).
-
-    Returns:
-        Путь к записанному ``.conf``.
-
-    Побочные эффекты:
-        Если задан ``WIREGUARD_NETWORK_CIDR``, выполняется валидация через
-        ``subnet_prefix_from_network_cidr`` (как при настройке из панели). Права ``0600`` на файл
-        при возможности.
+    Для ``amneziawg`` в ``[Interface]`` копируются параметры обфускации сервера
+    (``Jc/Jmin/Jmax/S1..S4/H1..H4``), иначе клиент не подключится к AmneziaWG.
     """
     client_config_dir.mkdir(parents=True, exist_ok=True)
     (client_config_dir / "qr").mkdir(parents=True, exist_ok=True)
@@ -300,19 +304,27 @@ def write_client_conf_file(
     if address_cidr:
         _ = wireguard_conf.subnet_prefix_from_network_cidr(address_cidr)
     client_address = f"{tunnel_ip}/24"
-    text = (
-        "[Interface]\n"
-        f"PrivateKey = {private_key}\n"
-        f"Address = {client_address}\n"
-        f"DNS = {dns}\n"
-        "\n"
-        "[Peer]\n"
-        f"PublicKey = {server_public_key}\n"
-        f"Endpoint = {endpoint}\n"
-        "AllowedIPs = 0.0.0.0/0\n"
-        "PersistentKeepalive = 25\n"
+    conf_path = wg_conf_path_resolved()
+    lines = [
+        "[Interface]",
+        f"PrivateKey = {private_key}",
+        f"Address = {client_address}",
+        f"DNS = {dns}",
+    ]
+    if vpservice.active_vpservice_type(conf_path) == vpservice.AMNEZIAWG:
+        lines.extend(_server_obfuscation_lines(conf_path))
+    lines.extend(
+        [
+            "",
+            "[Peer]",
+            f"PublicKey = {server_public_key}",
+            f"Endpoint = {endpoint}",
+            "AllowedIPs = 0.0.0.0/0",
+            "PersistentKeepalive = 25",
+            "",
+        ]
     )
-    path.write_text(text, encoding="utf-8")
+    path.write_text("\n".join(lines), encoding="utf-8")
     try:
         os.chmod(path, 0o600)
     except OSError:
