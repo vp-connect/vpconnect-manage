@@ -278,7 +278,7 @@ def test_load_document_clients_not_list(tmp_path, monkeypatch):
 
 def test_create_client_runtime_no_wg(monkeypatch):
     monkeypatch.setattr(settings, "WIREGUARD_CONF_PATH", "")
-    with pytest.raises(RuntimeError, match="WireGuard"):
+    with pytest.raises(RuntimeError, match="VPN service|WireGuard"):
         vpn_clients_service.create_client("x")
 
 

@@ -1,6 +1,6 @@
 # vpconnect-manage
 
-Веб-панель администратора для **SelfVPN / vpconnect**: один администратор, опционально **WireGuard** (синхронизация с `wg0.conf`), опционально **Telegram MTProxy** (ссылка и QR). Конфигурация — **`settings.env`** в корне репозитория.
+Веб-панель администратора для **SelfVPN / vpconnect**: один администратор, опционально **VPN service** (`wireguard` или `amneziawg`, синхронизация с серверным конфигом), опционально **Telegram MTProxy** (ссылка и QR). Конфигурация — **`settings.env`** в корне репозитория.
 
 Лицензия: [MIT](LICENSE).
 
@@ -8,12 +8,12 @@
 
 - **Авторизация** — MD5 пароля в `manage_site/data/admin_user.json`, лимит попыток и блокировка по IP (`settings.env`).
 - **Первый запуск** — при заданном `ADMIN_DEFAULT_PASSWORD` и отсутствии `admin_user.json` создаётся файл с хэшем.
-- **WireGuard** — при непустом `WIREGUARD_CONF_PATH`: дашборд, CRUD с правкой `wg0.conf`, синхронизация JSON, выдача `.conf` и QR.
+- **VPN service** — при непустом `WIREGUARD_CONF_PATH`: дашборд, CRUD с правкой серверного конфига, синхронизация JSON, выдача `.conf` и QR.
 - **MTProxy** — при непустом `MTPROXY_LINK_FILE`: блок в UI и QR.
 
 ## Почему отдельно Endpoint и публичный хост
 
-Серверный `wg0.conf` не содержит «внешний» адрес для клиентов из интернета. Строка **`Endpoint`** в клиентском конфиге — это **публичный host:port**. Задаётся либо **`WIREGUARD_ENDPOINT`**, либо **`WIREGUARD_PUBLIC_HOST`** плюс порт из **`WIREGUARD_LISTEN_PORT`**, из **`ListenPort`** в конфиге или **51820**.
+Серверный конфиг сервиса не содержит «внешний» адрес для клиентов из интернета. Строка **`Endpoint`** в клиентском конфиге — это **публичный host:port**. Задаётся либо **`WIREGUARD_ENDPOINT`**, либо **`WIREGUARD_PUBLIC_HOST`** плюс порт из **`WIREGUARD_LISTEN_PORT`**, из **`ListenPort`** в конфиге или **51820**.
 
 ## Структура проекта
 
@@ -76,7 +76,10 @@
 | `ADMIN_DEFAULT_PASSWORD` | Автосоздание `admin_user.json` и сброс пароля из UI. |
 | `LOGIN_MAX_FAILED_ATTEMPTS` | Порог неудачных попыток входа с IP. |
 | `LOGIN_LOCKOUT_MINUTES` | Длительность блокировки IP (минуты). |
-| `WIREGUARD_CONF_PATH` | Путь к `wg0.conf`; **пусто** — WG в UI отключён. |
+| `WIREGUARD_CONF_PATH` | Путь к серверному конфигу VPN-сервиса; **пусто** — секция клиентов в UI отключена. |
+| `VP_SERVICE_TYPE` | Тип VPN-сервиса: `wireguard` или `amneziawg`; пусто — автоопределение по конфигу. |
+| `VP_SERVICE_BINARY` | Переопределение бинарника (`wg`/`awg`) для `show/genkey/pubkey/syncconf`. |
+| `VP_SERVICE_QUICK_BINARY` | Переопределение бинарника (`wg-quick`/`awg-quick`) для `strip` при `syncconf`. |
 | `WIREGUARD_SYNC_INTERVAL_MINUTES` | Интервал фоновой синхронизации JSON; **0** — только старт и открытие дашборда. |
 | `WIREGUARD_INTERFACE_NAME` | Имя интерфейса для `wg-quick` / `wg syncconf`. |
 | `WIREGUARD_ENDPOINT` | Полный `host:port` для клиентских конфигов. |
@@ -87,7 +90,7 @@
 | `WIREGUARD_CLIENT_KEYS_DIR` | Каталог ключей клиентов; пусто — `manage_site/data/vpn_client_keys` (относительно **cwd**). |
 | `MTPROXY_LINK_FILE` | Файл со ссылкой MTProxy; **пусто** — блок MTProxy скрыт. |
 
-Для **создания** клиентов WG нужны `WIREGUARD_CONF_PATH` и задание Endpoint (`WIREGUARD_ENDPOINT` или `WIREGUARD_PUBLIC_HOST` + порт по правилам выше).
+Для **создания** клиентов VPN нужны `WIREGUARD_CONF_PATH` и задание Endpoint (`WIREGUARD_ENDPOINT` или `WIREGUARD_PUBLIC_HOST` + порт по правилам выше).
 
 На серверах с **VPCONFIGURE_*** часто совмещают: `WIREGUARD_PUBLIC_HOST` ≈ `VPCONFIGURE_DOMAIN`, `MTPROXY_LINK_FILE` ≈ путь из `VPCONFIGURE_MTPROXY_LINK_PATH`.
 

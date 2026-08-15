@@ -66,7 +66,7 @@ def register_wireguard_background_sync(app: Flask) -> None:
         Ничего не делает, если WireGuard выключен. Ошибка стартовой синхронизации
         логируется. Поток создаётся только при положительном интервале минут.
     """
-    if not settings.wireguard_enabled():
+    if not settings.vpservice_enabled():
         return
     try:
         with app.app_context():

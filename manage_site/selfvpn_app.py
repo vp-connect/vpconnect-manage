@@ -42,6 +42,7 @@ from . import login_attempts_store
 from . import mtproxy_link
 from . import settings
 from . import telegram_proxy_qr
+from . import vpservice
 from . import vpn_clients_service
 from . import wg_background_sync
 
@@ -174,7 +175,7 @@ def _require_wireguard() -> None:
 
     Прецедент: маршруты под ``/clients/...``.
     """
-    if not settings.wireguard_enabled():
+    if not settings.vpservice_enabled():
         abort(404)
 
 
@@ -185,15 +186,19 @@ def home():
 
     Данные клиентов при включённом WG синхронизируются с ``wg0.conf`` перед рендером.
     """
-    wireguard_enabled = settings.wireguard_enabled()
+    wireguard_enabled = settings.vpservice_enabled()
     mtproxy_enabled = settings.mtproxy_enabled()
     clients = (
         vpn_clients_service.sync_clients_json_with_runtime_state() if wireguard_enabled else []
     )
     telegram_proxy_url = mtproxy_link.read_mtproxy_link() if mtproxy_enabled else None
+    vpn_service_display_name = (
+        vpservice.vpservice_display_name() if wireguard_enabled else ""
+    )
     return render_template(
         "clients.html",
         wireguard_enabled=wireguard_enabled,
+        vpn_service_display_name=vpn_service_display_name,
         mtproxy_enabled=mtproxy_enabled,
         clients=clients,
         telegram_proxy_url=telegram_proxy_url,

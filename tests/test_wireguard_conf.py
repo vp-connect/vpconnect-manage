@@ -187,3 +187,17 @@ def test_try_run_wg_syncconf_invokes_subprocess_when_resolved_paths_match(mock_r
     with patch.object(Path, "resolve", lambda self: unified):
         wireguard_conf.try_run_wg_syncconf("wg0", Path("/any/wg0.conf"), None)
     mock_run.assert_called_once()
+
+
+@patch("manage_site.wireguard_conf.subprocess.run")
+def test_try_run_wg_syncconf_invokes_subprocess_for_awg_standard_path(mock_run: MagicMock):
+    unified = Path("/etc/amnezia/amneziawg/awg0.conf")
+    with patch.object(Path, "resolve", lambda self: unified):
+        wireguard_conf.try_run_wg_syncconf(
+            "awg0",
+            Path("/any/awg0.conf"),
+            None,
+            vp_binary="awg",
+            vp_quick_binary="awg-quick",
+        )
+    mock_run.assert_called_once()

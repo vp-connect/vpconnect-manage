@@ -17,3 +17,10 @@ def test_mtproxy_enabled_true_false(monkeypatch):
     assert settings.mtproxy_enabled() is True
     monkeypatch.setattr(settings, "MTPROXY_LINK_FILE", "")
     assert settings.mtproxy_enabled() is False
+
+
+def test_vpservice_enabled_true_false(monkeypatch):
+    monkeypatch.setattr(settings, "WIREGUARD_CONF_PATH", "/etc/wg0.conf")
+    assert settings.vpservice_enabled() is True
+    monkeypatch.setattr(settings, "WIREGUARD_CONF_PATH", "")
+    assert settings.vpservice_enabled() is False

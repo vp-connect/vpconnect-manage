@@ -72,6 +72,15 @@ def test_home_authenticated_ok(authenticated_client):
     assert resp.status_code == 200
 
 
+def test_home_renders_vpservice_type_in_clients_header(authenticated_client, monkeypatch):
+    monkeypatch.setattr(settings, "WIREGUARD_CONF_PATH", "/tmp/wg0.conf")
+    monkeypatch.setattr(settings, "VP_SERVICE_TYPE", "amneziawg")
+    with patch.object(app_module.vpn_clients_service, "sync_clients_json_with_runtime_state", return_value=[]):
+        resp = authenticated_client.get("/")
+    assert resp.status_code == 200
+    assert "Клиенты (Amnezia WG)".encode("utf-8") in resp.data
+
+
 def test_fmt_lockout_utc_filter(app):
     filt = app.jinja_env.filters["fmt_lockout_utc"]
     dt = datetime(2025, 3, 4, 15, 30, tzinfo=timezone.utc)

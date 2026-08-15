@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Клиенты — SelfVPN</title>
+  <title>Клиенты{% if wireguard_enabled %} ({{ vpn_service_display_name }}){% endif %} — SelfVPN</title>
   <link rel="icon" type="image/x-icon" href="{{ url_for('favicon') }}">
   <link rel="alternate icon" type="image/svg+xml" href="{{ url_for('static', filename='img/favicon.svg') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}">
@@ -67,7 +67,7 @@
     {% if wireguard_enabled %}
     <section class="dash-card">
       <div class="dash-card-head">
-        <h1 class="dash-card-title">Клиенты</h1>
+        <h1 class="dash-card-title">Клиенты ({{ vpn_service_display_name }})</h1>
         <button type="button" class="dash-btn dash-btn-outline js-open-create">+ Создать</button>
       </div>
 

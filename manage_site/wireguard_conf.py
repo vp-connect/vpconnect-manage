@@ -51,6 +51,22 @@ class WgPeerBlock:
         return WgPeerBlock(name=self.name, body_lines=list(self.body_lines))
 
 
+def _expected_syncconf_paths(interface: str, vp_quick_binary: str) -> set[Path]:
+    """
+    Ожидаемые стандартные пути конфигов для ``*-quick strip``.
+
+    Для совместимости поддерживаются wireguard и типичные директории AmneziaWG.
+    """
+    paths = {
+        (Path("/etc/wireguard") / f"{interface}.conf").resolve(),
+    }
+    quick = (vp_quick_binary or "").strip().lower()
+    if quick.startswith("awg-quick"):
+        paths.add((Path("/etc/amnezia/amneziawg") / f"{interface}.conf").resolve())
+        paths.add((Path("/etc/amnezia/wireguard") / f"{interface}.conf").resolve())
+    return paths
+
+
 def _line_is_active(line: str) -> bool:
     """True, если строка не пустая и не начинается с ``#`` (как у активного пира в bash-скриптах)."""
     s = line.strip()
@@ -404,9 +420,11 @@ def try_run_wg_syncconf(
     interface: str,
     conf_path: Path,
     log_warning: Callable[[str], None] | None = None,
+    vp_binary: str = "wg",
+    vp_quick_binary: str = "wg-quick",
 ) -> None:
     """
-    Применить изменения ``wg0.conf`` через ``wg syncconf`` (только «стандартный» путь в ``/etc``).
+    Применить изменения ``wg0.conf`` через ``<vp> syncconf`` (стандартный путь в ``/etc``).
 
     Прецедент: ``wg_local_runtime.apply_wg_syncconf_if_configured`` после правок панелью.
 
@@ -416,19 +434,24 @@ def try_run_wg_syncconf(
         log_warning: опциональный колбэк для предупреждений (пропуск sync, ошибки bash/wg).
 
     Поведение:
-        Если ``conf_path.resolve()`` не совпадает с ``/etc/wireguard/<interface>.conf``,
-        sync не выполняется — только предупреждение.
+        Если ``conf_path.resolve()`` не совпадает ни с одним стандартным путём
+        для выбранного ``*-quick`` бинарника, sync не выполняется — только предупреждение.
     """
     try:
-        expected = (Path("/etc/wireguard") / f"{interface}.conf").resolve()
-        if conf_path.resolve() != expected:
+        expected_paths = _expected_syncconf_paths(interface, vp_quick_binary)
+        resolved_conf_path = conf_path.resolve()
+        if resolved_conf_path not in expected_paths:
             if log_warning:
+                expected = ", ".join(str(p) for p in sorted(expected_paths))
                 log_warning(
-                    f"WIREGUARD_CONF_PATH не совпадает с {expected}; wg syncconf пропущен "
+                    f"WIREGUARD_CONF_PATH не совпадает с одним из [{expected}]; wg syncconf пропущен "
                     "(ожидается стандартный путь для wg-quick strip)."
                 )
             return
-        cmd = f"wg syncconf {shlex.quote(interface)} <(wg-quick strip {shlex.quote(interface)})"
+        cmd = (
+            f"{shlex.quote(vp_binary)} syncconf {shlex.quote(interface)} "
+            f"<({shlex.quote(vp_quick_binary)} strip {shlex.quote(interface)})"
+        )
         subprocess.run(
             ["bash", "-lc", cmd],
             check=True,
@@ -438,10 +461,14 @@ def try_run_wg_syncconf(
         )
     except FileNotFoundError:
         if log_warning:
-            log_warning("bash/wg не найдены; wg syncconf пропущен.")
+            log_warning(
+                f"bash/{vp_binary} не найдены; {vp_binary} syncconf пропущен."
+            )
     except subprocess.CalledProcessError as e:
         if log_warning:
-            log_warning(f"wg syncconf завершился с ошибкой: {e.stderr or e.stdout or e}")
+            log_warning(
+                f"{vp_binary} syncconf завершился с ошибкой: {e.stderr or e.stdout or e}"
+            )
     except OSError as e:
         if log_warning:
-            log_warning(f"wg syncconf: {e}")
+            log_warning(f"{vp_binary} syncconf: {e}")

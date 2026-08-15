@@ -23,12 +23,31 @@ import subprocess
 from pathlib import Path
 
 from . import settings
+from . import vpservice
 from . import wireguard_conf
 
 _log = logging.getLogger(__name__)
 
 _PRIVATE_KEY_RE = re.compile(r"^\s*PrivateKey\s*=\s*(\S+)\s*$")
 _LISTEN_PORT_RE = re.compile(r"^\s*ListenPort\s*=\s*(\d+)\s*$")
+
+
+def _vp_binary(conf_path: Path | None = None) -> str:
+    """Имя бинарника управления VPN-сервисом (wg/awg) с override из env."""
+    explicit = (settings.VP_SERVICE_BINARY or "").strip()
+    if explicit:
+        return explicit
+    active = vpservice.active_vpservice_type(conf_path)
+    return "awg" if active == vpservice.AMNEZIAWG else "wg"
+
+
+def _vp_quick_binary(conf_path: Path | None = None) -> str:
+    """Имя *-quick бинарника (wg-quick/awg-quick) с override из env."""
+    explicit = (settings.VP_SERVICE_QUICK_BINARY or "").strip()
+    if explicit:
+        return explicit
+    active = vpservice.active_vpservice_type(conf_path)
+    return "awg-quick" if active == vpservice.AMNEZIAWG else "wg-quick"
 
 
 def wg_conf_path_resolved() -> Path:
@@ -101,8 +120,9 @@ def _wg_show_interface_public_key() -> str | None:
         Непустая строка ключа или ``None`` (интерфейс не поднят, ``wg`` недоступен, таймаут).
     """
     try:
+        vp_bin = _vp_binary()
         out = subprocess.run(
-            ["wg", "show", settings.WIREGUARD_INTERFACE_NAME, "public-key"],
+            [vp_bin, "show", settings.WIREGUARD_INTERFACE_NAME, "public-key"],
             check=False,
             capture_output=True,
             text=True,
@@ -160,8 +180,9 @@ def _public_key_from_private(priv: str) -> str | None:
         Публичный ключ или ``None`` при ошибке процесса.
     """
     try:
+        vp_bin = _vp_binary()
         pub = subprocess.run(
-            ["wg", "pubkey"],
+            [vp_bin, "pubkey"],
             input=priv,
             check=True,
             capture_output=True,
@@ -212,8 +233,9 @@ def wg_gen_keypair() -> tuple[str, str]:
         RuntimeError: если ``wg`` не найдена или команда завершилась с ошибкой.
     """
     try:
+        vp_bin = _vp_binary()
         gen = subprocess.run(
-            ["wg", "genkey"],
+            [vp_bin, "genkey"],
             check=True,
             capture_output=True,
             text=True,
@@ -221,7 +243,7 @@ def wg_gen_keypair() -> tuple[str, str]:
         )
         priv = gen.stdout.strip()
         pub = subprocess.run(
-            ["wg", "pubkey"],
+            [vp_bin, "pubkey"],
             input=priv,
             check=True,
             capture_output=True,
@@ -230,10 +252,15 @@ def wg_gen_keypair() -> tuple[str, str]:
         )
         return priv, pub.stdout.strip()
     except FileNotFoundError as e:
-        raise RuntimeError("Команда wg не найдена. Установите wireguard-tools.") from e
+        service_name = vpservice.vpservice_display_name()
+        vp_bin = _vp_binary()
+        raise RuntimeError(
+            f"Команда {vp_bin} не найдена. Установите инструменты {service_name}."
+        ) from e
     except subprocess.CalledProcessError as e:
         err = (e.stderr or e.stdout or "").strip() or str(e)
-        raise RuntimeError(f"Ошибка генерации ключей wg: {err}") from e
+        service_name = vpservice.vpservice_display_name()
+        raise RuntimeError(f"Ошибка генерации ключей {service_name}: {err}") from e
 
 
 def write_client_conf_file(
@@ -307,10 +334,18 @@ def apply_wg_syncconf_if_configured() -> None:
     Поведение:
         Ничего не делает при выключенном WireGuard. Иначе делегирует в ``wireguard_conf.try_run_wg_syncconf``.
     """
-    if not settings.wireguard_enabled():
+    if not settings.vpservice_enabled():
         return
+    conf_path = wg_conf_path_resolved()
     wireguard_conf.try_run_wg_syncconf(
         settings.WIREGUARD_INTERFACE_NAME,
-        wg_conf_path_resolved(),
+        conf_path,
         _syncconf_log_warning,
+        vp_binary=_vp_binary(conf_path),
+        vp_quick_binary=_vp_quick_binary(conf_path),
     )
+
+
+def apply_vp_syncconf_if_configured() -> None:
+    """Обратная совместимость: общее имя для применения конфига сервиса."""
+    apply_wg_syncconf_if_configured()

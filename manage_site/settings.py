@@ -49,6 +49,18 @@ VPN_CLIENTS_JSON_PATH = _MANAGE_SITE_ROOT / "data" / "vpn_clients.json"
 
 WIREGUARD_CONF_PATH = (get_str_env_param("WIREGUARD_CONF_PATH", default="") or "").strip()
 
+SUPPORTED_VP_SERVICE_TYPES = ("wireguard", "amneziawg")
+
+VP_SERVICE_TYPE = (get_str_env_param("VP_SERVICE_TYPE", default="") or "").strip().lower()
+if VP_SERVICE_TYPE and VP_SERVICE_TYPE not in SUPPORTED_VP_SERVICE_TYPES:
+    raise ValueError(
+        "VP_SERVICE_TYPE должен быть одним из: "
+        + ", ".join(SUPPORTED_VP_SERVICE_TYPES)
+    )
+
+VP_SERVICE_BINARY = (get_str_env_param("VP_SERVICE_BINARY", default="") or "").strip()
+VP_SERVICE_QUICK_BINARY = (get_str_env_param("VP_SERVICE_QUICK_BINARY", default="") or "").strip()
+
 WIREGUARD_SYNC_INTERVAL_MINUTES = get_int_env_param(
     "WIREGUARD_SYNC_INTERVAL_MINUTES",
     default=5,
@@ -84,9 +96,9 @@ WIREGUARD_CLIENT_KEYS_DIR = get_file_env_param(
 MTPROXY_LINK_FILE = (get_str_env_param("MTPROXY_LINK_FILE", default="") or "").strip()
 
 
-def wireguard_enabled() -> bool:
+def vpservice_enabled() -> bool:
     """
-    Проверить, включена ли интеграция с WireGuard в панели.
+    Проверить, включена ли интеграция с VPN-сервисом в панели.
 
     Прецедент: перед маршрутами и сервисами, где нужен ``wg0.conf``.
 
@@ -94,6 +106,16 @@ def wireguard_enabled() -> bool:
         ``True``, если в настройках задан непустой ``WIREGUARD_CONF_PATH``.
     """
     return bool(WIREGUARD_CONF_PATH)
+
+
+def wireguard_enabled() -> bool:
+    """
+    Обратная совместимость: прежнее имя feature-flag функции.
+
+    Returns:
+        Текущее значение ``vpservice_enabled()``.
+    """
+    return vpservice_enabled()
 
 
 def mtproxy_enabled() -> bool:

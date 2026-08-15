@@ -32,6 +32,7 @@ from typing import Any
 import qrcode
 
 from . import settings
+from . import vpservice
 from . import wg_local_runtime
 from . import wireguard_conf
 
@@ -338,11 +339,11 @@ def sync_clients_json_with_runtime_state() -> list[dict[str, Any]]:
         Список клиентов после merge; пустой список, если WG выключен или ``wg0.conf`` нет.
     """
     with _lock:
-        if not settings.wireguard_enabled():
+        if not settings.vpservice_enabled():
             return []
         conf_path = wg_local_runtime.wg_conf_path_resolved()
         if not conf_path.is_file():
-            _log.warning("WireGuard: файл конфигурации не найден: %s", conf_path)
+            _log.warning("VPN service: файл конфигурации не найден: %s", conf_path)
             return []
         doc = _load_document(settings.VPN_CLIENTS_JSON_PATH)
         if _merge_wg_into_document(doc, conf_path):
@@ -451,12 +452,13 @@ def create_client(name: str) -> dict[str, Any]:
     name = (name or "").strip()
     if not name:
         raise ValueError("Имя пользователя не может быть пустым")
-    if not settings.wireguard_enabled():
-        raise RuntimeError("WireGuard не настроен (WIREGUARD_CONF_PATH)")
+    if not settings.vpservice_enabled():
+        raise RuntimeError("VPN service не настроен (WIREGUARD_CONF_PATH)")
 
     conf_path = wg_local_runtime.wg_conf_path_resolved()
     if not conf_path.is_file():
-        raise RuntimeError(f"Нет файла конфигурации WireGuard: {conf_path}")
+        display_name = vpservice.vpservice_display_name(conf_path)
+        raise RuntimeError(f"Нет файла конфигурации {display_name}: {conf_path}")
 
     endpoint = wg_local_runtime.resolve_client_endpoint(conf_path)
     subnet_prefix = _create_client_subnet_prefix(conf_path)
@@ -483,7 +485,7 @@ def create_client(name: str) -> dict[str, Any]:
             srv_pub = wg_local_runtime.server_public_key_from_interface(conf_path)
             if not srv_pub:
                 raise RuntimeError(
-                    "Не удалось получить публичный ключ сервера из конфига "
+                    "Не удалось получить публичный ключ сервера из конфига VPN-сервиса "
                     "(PrivateKey в [Interface])"
                 )
             wg_local_runtime.write_client_conf_file(
@@ -529,7 +531,7 @@ def set_client_enabled(client_id: str, enabled: bool) -> None:
     Raises:
         KeyError: WG выключен, клиент не найден, нет ``wg_name``, пир не найден в конфиге.
     """
-    if not settings.wireguard_enabled():
+    if not settings.vpservice_enabled():
         raise KeyError(client_id)
 
     with _lock:
@@ -594,7 +596,7 @@ def delete_client(client_id: str) -> None:
     Raises:
         KeyError: WG выключен или клиент не найден.
     """
-    if not settings.wireguard_enabled():
+    if not settings.vpservice_enabled():
         raise KeyError(client_id)
 
     with _lock:
@@ -630,7 +632,7 @@ def client_config_text(client_id: str) -> str:
     c = get_client(client_id)
     if not c:
         raise KeyError(client_id)
-    if not settings.wireguard_enabled():
+    if not settings.vpservice_enabled():
         raise KeyError(client_id)
     wgn = c.get("wg_name")
     if isinstance(wgn, str) and wgn.strip():
@@ -642,7 +644,7 @@ def client_config_text(client_id: str) -> str:
     ip = c.get("tunnel_ip", "")
     key_rel = c.get("private_key_rel", "")
     return (
-        f"# SelfVPN (конфиг клиента не найден на диске)\n"
+        f"# SelfVPN (конфиг клиента VPN-сервиса не найден на диске)\n"
         f"# client_id={tid}\n"
         f"# name={name}\n"
         f"[Interface]\n"
